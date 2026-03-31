@@ -29,12 +29,10 @@ along with zelph. If not, see <https://www.gnu.org/licenses/>.
 #include "network/zelph.hpp"
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <iomanip>
-#include <sstream>
 #include <vector>
 
 #define ZELPH_WIKIDATA_IMPORT_DIAGNOSTICS 1
@@ -195,6 +193,7 @@ namespace zelph::wikidata
         std::atomic<uint64_t> _set_name_ns{0};
     };
 
+#if ZELPH_WIKIDATA_IMPORT_DIAGNOSTICS
     static void log_import_window(
         zelph::network::Zelph*                      n,
         const ImportDiagSnapshot&                   cur,
@@ -211,7 +210,6 @@ namespace zelph::wikidata
         uint64_t                                    node_count,
         unsigned int                                num_threads)
     {
-#if ZELPH_WIKIDATA_IMPORT_DIAGNOSTICS
         const uint64_t wall_ns = to_ns(now - last);
         if (wall_ns == 0) return;
 
@@ -243,10 +241,9 @@ namespace zelph::wikidata
                                       ? 100.0 * static_cast<double>(current_bytes) / static_cast<double>(total_size)
                                       : 0.0;
 
-        const double cpu_cores_avg           = wall_ns > 0 ? static_cast<double>(cpu_cur_ns - cpu_prev_ns) / static_cast<double>(wall_ns) : 0.0;
-        const double worker_busy_cores       = wall_ns > 0 ? static_cast<double>(entry_delta) / static_cast<double>(wall_ns) : 0.0;
-        const double worker_wait_cores       = wall_ns > 0 ? static_cast<double>(wait_delta) / static_cast<double>(wall_ns) : 0.0;
-        const double reader_blocked_fraction = wall_ns > 0 ? static_cast<double>(read_wait_full_delta) / static_cast<double>(wall_ns) : 0.0;
+        const double cpu_cores_avg     = wall_ns > 0 ? static_cast<double>(cpu_cur_ns - cpu_prev_ns) / static_cast<double>(wall_ns) : 0.0;
+        const double worker_busy_cores = wall_ns > 0 ? static_cast<double>(entry_delta) / static_cast<double>(wall_ns) : 0.0;
+        const double worker_wait_cores = wall_ns > 0 ? static_cast<double>(wait_delta) / static_cast<double>(wall_ns) : 0.0;
 
         const uint64_t accounted   = id_delta + label_delta + scan_delta + subj_delta + prop_delta + obj_delta + fact_delta + name_delta;
         const uint64_t other_delta = entry_delta > accounted ? entry_delta - accounted : 0;
@@ -328,21 +325,6 @@ namespace zelph::wikidata
             ds << "[ImportDiag] note: cpu(main) excludes external decompressor process '" << read_cur.decompressor_name << "'."
                << std::endl;
         }
-#else
-        (void)n;
-        (void)cur;
-        (void)prev;
-        (void)read_cur;
-        (void)read_prev;
-        (void)now;
-        (void)last;
-        (void)cpu_cur_ns;
-        (void)cpu_prev_ns;
-        (void)current_bytes;
-        (void)total_size;
-        (void)export_constraints;
-        (void)node_count;
-        (void)num_threads;
-#endif
     }
+#endif
 }

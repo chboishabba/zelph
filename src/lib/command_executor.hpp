@@ -64,14 +64,13 @@ namespace zelph::console
          *
          * @param reasoning Pointer to the reasoning network (must remain valid).
          * @param script_engine Pointer to the script engine (must remain valid).
-         * @param data_manager Reference to the shared_ptr holding the data manager (allows replacement).
+         * @param repl_state Shared REPL state used for mode flags and buffers.
          * @param line_processor Callback to process a raw line (used for .import recursion).
          */
-        CommandExecutor(zelph::network::Reasoning*        reasoning,
-                        zelph::ScriptEngine*              script_engine,
-                        std::shared_ptr<io::DataManager>& data_manager,
-                        std::shared_ptr<ReplState>        repl_state,
-                        LineProcessor                     line_processor);
+        CommandExecutor(zelph::network::Reasoning* reasoning,
+                        zelph::ScriptEngine*        script_engine,
+                        std::shared_ptr<ReplState> repl_state,
+                        LineProcessor              line_processor);
 
         ~CommandExecutor();
 

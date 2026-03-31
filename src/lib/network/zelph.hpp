@@ -50,6 +50,23 @@ namespace zelph::network
     class ZELPH_EXPORT Zelph
     {
     public:
+        struct BinChunkSelection
+        {
+            std::vector<uint32_t> left;
+            std::vector<uint32_t> right;
+            std::vector<uint32_t> nameOfNode;
+            std::vector<uint32_t> nodeOfName;
+            std::vector<uint64_t> route_nodes;
+            std::string           route_name;
+            std::string           route_lang;
+            bool                  left_explicit = false;
+            bool                  right_explicit = false;
+            bool                  name_of_node_explicit = false;
+            bool                  node_of_name_explicit = false;
+            bool                  route_nodes_explicit = false;
+            bool                  route_name_explicit = false;
+        };
+
         explicit Zelph(const io::OutputHandler& output = io::default_output_handler);
         ~Zelph();
 
@@ -170,6 +187,12 @@ namespace zelph::network
         size_t        rule_count() const;
         void          save_to_file(const std::string& filename) const;
         void          load_from_file(const std::string& filename) const;
+        void          load_from_file(const std::string& filename, const BinChunkSelection& selection, bool skip_payload = false) const;
+        void          load_from_manifest(const std::string& manifest_path,
+                                         const BinChunkSelection& selection,
+                                         const std::string& shard_root = "",
+                                         const std::string& bin_path_override = "",
+                                         bool skip_payload = false) const;
 
         // --- Members ---
 

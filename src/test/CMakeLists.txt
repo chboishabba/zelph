@@ -23,19 +23,27 @@
 
 include(FetchContent)
 
-# doctest v2.4.11 declares cmake_minimum_required(VERSION 3.1),
+# doctest v2.4.12 declares cmake_minimum_required(VERSION 3.1),
 # which newer CMake rejects. Allow it to configure anyway.
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "")
 
 FetchContent_Declare(
     doctest
     GIT_REPOSITORY https://github.com/doctest/doctest.git
-    GIT_TAG v2.4.11
+    GIT_TAG v2.4.12
+    SYSTEM
 )
 FetchContent_MakeAvailable(doctest)
 
 add_executable(zelph_tests test_interactive.cpp)
 target_link_libraries(zelph_tests PRIVATE zelph_lib doctest_with_main)
+
+# suppress doctest specific __COUNTER__ warnings
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    target_compile_options(zelph_tests PRIVATE -Wno-c2y-extensions -Wno-\#warnings)
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(zelph_tests PRIVATE -Wno-cpp)
+endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     find_package(Threads REQUIRED)
