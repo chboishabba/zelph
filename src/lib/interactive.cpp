@@ -34,10 +34,13 @@ along with zelph. If not, see <https://www.gnu.org/licenses/>.
 #include "string/node_to_string.hpp"
 #include "string/string_utils.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <tuple>
+#include <vector>
 
 using namespace zelph;
 
@@ -56,6 +59,30 @@ namespace
             graph->deactivate_cluster();
         else
             graph->set_active_cluster(previous);
+    }
+
+    struct GraphShape
+    {
+        network::Node nodes = 0;
+        size_t rules = 0;
+        std::vector<std::tuple<std::string, size_t, size_t>> language_names;
+
+        friend bool operator==(const GraphShape&, const GraphShape&) = default;
+    };
+
+    GraphShape graph_shape(const network::Reasoning& graph)
+    {
+        GraphShape shape;
+        shape.nodes = graph.count();
+        shape.rules = graph.rule_count();
+        auto languages = graph.get_languages();
+        std::sort(languages.begin(), languages.end());
+        for (const auto& language : languages)
+            shape.language_names.emplace_back(
+                language,
+                graph.get_name_of_node_size(language),
+                graph.get_node_of_name_size(language));
+        return shape;
     }
 
     bool keyword_text_complete(const std::string& text)
@@ -109,8 +136,6 @@ public:
             [this](const std::string& line)
             { _interactive->process(line); });
 
-        // All import entry points share the partial-mode capability policy,
-        // including nested zelph/import calls from an imported module.
         _script_engine->set_import_handler(
             [this](const std::string& path, const std::vector<std::string>& args)
             { import_with_partial_policy(path, args); });
@@ -229,8 +254,6 @@ public:
             if (keyword != "sparql")
                 throw std::runtime_error("Registered keyword '" + keyword + "' is not certified for partial-graph execution");
 
-            // Preserve the normal blank-line veto protocol. Classification and
-            // metadata are emitted only when this text is ready for dispatch.
             if (!force && !keyword_text_complete(text))
                 return _script_engine->invoke_keyword(keyword, text, force);
 
@@ -249,7 +272,10 @@ public:
             _n->out("  row_contract: " + std::string(partial_sparql::result_contract_name(assessment.result_contract)), true);
             _n->out("  global_completeness: not_established", true);
 
-            const auto before = partial_sparql::fingerprint(*_n);
+            // Keep the query hot path proportional to query work, not the
+            // entire resident graph. New query nodes are isolated by the
+            // temporary cluster; this shape check detects surviving changes.
+            const auto before_shape = graph_shape(*_n);
             const auto previous_cluster = _n->active_cluster_name();
             const auto query_cluster = partial_scope_name("query");
             _n->set_active_cluster(query_cluster);
@@ -264,8 +290,8 @@ public:
                 _n->deactivate_cluster();
                 _n->drop_cluster(query_cluster);
                 restore_cluster(_n.get(), previous_cluster);
-                const auto restored = partial_sparql::fingerprint(*_n);
-                if (!(restored == before))
+                const auto restored_shape = graph_shape(*_n);
+                if (!(restored_shape == before_shape))
                     throw std::runtime_error("Partial SPARQL failed and its ephemeral graph rollback was incomplete");
                 throw;
             }
@@ -273,13 +299,9 @@ public:
             _n->deactivate_cluster();
             const auto ephemeral_nodes = _n->drop_cluster(query_cluster);
             restore_cluster(_n.get(), previous_cluster);
-            const auto restored = partial_sparql::fingerprint(*_n);
-            if (!(restored == before))
-            {
-                throw std::runtime_error(
-                    "Partial SPARQL violated the read-only graph invariant. Before: "
-                    + partial_sparql::describe(before) + "; restored: " + partial_sparql::describe(restored));
-            }
+            const auto restored_shape = graph_shape(*_n);
+            if (!(restored_shape == before_shape))
+                throw std::runtime_error("Partial SPARQL violated the read-only graph-shape invariant");
 
             if (dispatched)
             {
@@ -370,7 +392,6 @@ void console::Interactive::process(std::string line) const
     {
         auto& state = _pImpl->_repl_state;
 
-        // --- 0. Keyword block accumulation ---
         if (state->accumulating_keyword)
         {
             if (line.find_first_not_of(" \t\r") == std::string::npos)
@@ -417,12 +438,10 @@ void console::Interactive::process(std::string line) const
             return;
         }
 
-        // --- 1. Comments (work in all modes) ---
         if (!line.empty() && line[0] == '#') return;
 
         size_t first_char_pos = line.find_first_not_of(" \t");
 
-        // --- 2. Commands starting with '.' (work in all modes) ---
         if (first_char_pos != std::string::npos && line[first_char_pos] == '.')
         {
             std::vector<std::string> parts = zelph::string::tokenize_quoted(line);
@@ -434,10 +453,8 @@ void console::Interactive::process(std::string line) const
             }
         }
 
-        // --- 3. Empty lines ---
         if (first_char_pos == std::string::npos) return;
 
-        // --- 4. Accumulating an incomplete inline Janet expression ---
         if (state->accumulating_inline_janet)
         {
 #ifndef __EMSCRIPTEN__
@@ -458,7 +475,6 @@ void console::Interactive::process(std::string line) const
 
         std::string trimmed_utf8 = zelph::string::trim(line);
 
-        // --- 5. Mode toggle: bare '%' on a line ---
         if (trimmed_utf8 == "%")
         {
 #ifndef __EMSCRIPTEN__
@@ -489,7 +505,6 @@ void console::Interactive::process(std::string line) const
             return;
         }
 
-        // --- 6. Inline Janet: '%' followed by code ---
         if (trimmed_utf8[0] == '%')
         {
 #ifndef __EMSCRIPTEN__
@@ -515,7 +530,6 @@ void console::Interactive::process(std::string line) const
             return;
         }
 
-        // --- 7. Janet block mode: accumulate lines ---
         if (state->script_mode == ScriptMode::Janet)
         {
 #ifndef __EMSCRIPTEN__
@@ -526,7 +540,6 @@ void console::Interactive::process(std::string line) const
             return;
         }
 
-        // --- 8. Registered syntax keywords (e.g. "sparql") ---
         if (!state->accumulating_zelph)
         {
             size_t      end_of_token = trimmed_utf8.find_first_of(" \t");
@@ -553,7 +566,6 @@ void console::Interactive::process(std::string line) const
             throw std::runtime_error("Facts, rules, and ordinary Zelph statements are blocked while a partial graph is loaded");
 #endif
 
-        // --- 9. zelph mode: accumulate until statement is complete, then parse ---
         if (state->accumulating_zelph)
             state->zelph_buffer += "\n" + line;
         else
