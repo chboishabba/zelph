@@ -26,15 +26,78 @@ along with zelph. If not, see <https://www.gnu.org/licenses/>.
 #include "interactive.hpp"
 
 #include "command_executor.hpp"
+#include "import_policy.hpp"
 #include "network/reasoning.hpp"
+#include "partial_sparql.hpp"
 #include "repl_state.hpp"
 #include "script_engine.hpp"
 #include "string/node_to_string.hpp"
 #include "string/string_utils.hpp"
 
+#include <algorithm>
+#include <atomic>
 #include <memory>
+#include <optional>
+#include <stdexcept>
+#include <tuple>
+#include <vector>
 
 using namespace zelph;
+
+namespace
+{
+    std::atomic<uint64_t> partial_scope_serial{0};
+
+    std::string partial_scope_name(const char* kind)
+    {
+        return "__zelph_partial_" + std::string(kind) + "_" + std::to_string(++partial_scope_serial);
+    }
+
+    void restore_cluster(network::Reasoning* graph, const std::string& previous)
+    {
+        if (previous.empty() || previous == "default")
+            graph->deactivate_cluster();
+        else
+            graph->set_active_cluster(previous);
+    }
+
+    struct GraphShape
+    {
+        network::Node nodes = 0;
+        size_t rules = 0;
+        std::vector<std::tuple<std::string, size_t, size_t>> language_names;
+
+        friend bool operator==(const GraphShape&, const GraphShape&) = default;
+    };
+
+    GraphShape graph_shape(const network::Reasoning& graph)
+    {
+        GraphShape shape;
+        shape.nodes = graph.count();
+        shape.rules = graph.rule_count();
+        auto languages = graph.get_languages();
+        std::sort(languages.begin(), languages.end());
+        for (const auto& language : languages)
+            shape.language_names.emplace_back(
+                language,
+                graph.get_name_of_node_size(language),
+                graph.get_node_of_name_size(language));
+        return shape;
+    }
+
+    bool keyword_text_complete(const std::string& text)
+    {
+        const auto upper = console::partial_sparql::lexical_upper(text);
+        if (upper.find("SELECT") == std::string::npos || text.find('{') == std::string::npos) return false;
+        int depth = 0;
+        for (const char c : text)
+        {
+            if (c == '{') ++depth;
+            if (c == '}') --depth;
+        }
+        return depth == 0;
+    }
+}
 
 class console::Interactive::Impl
 {
@@ -66,7 +129,6 @@ public:
 
         _script_engine->initialize();
 
-        // Initialize CommandExecutor with references to our state
         _command_executor = std::make_unique<CommandExecutor>(
             _n.get(),
             _script_engine.get(),
@@ -74,17 +136,10 @@ public:
             [this](const std::string& line)
             { _interactive->process(line); });
 
-        // zelph/import delegates to the same implementation as the .import
-        // command (path resolution including the standard library, argument
-        // passing, auto-run handling).
         _script_engine->set_import_handler(
             [this](const std::string& path, const std::vector<std::string>& args)
-            { _command_executor->import_file(path, args); });
+            { import_with_partial_policy(path, args); });
 
-        // zelph/save and zelph/load delegate to the same implementation as
-        // the .save/.load commands (including all checks and side effects).
-        // Passing a pre-tokenized command vector (instead of a raw line
-        // through process) keeps filenames with spaces intact.
         _script_engine->set_command_handler(
             [this](const std::vector<std::string>& cmd)
             { _command_executor->execute(cmd); });
@@ -92,14 +147,15 @@ public:
 
     void reset_reasoning()
     {
-        _command_executor.reset();              // destroy first (depends on both)
-        _script_engine.reset();                 // destroy second (depends on _n)
-        auto output = _n->get_output_handler(); // save what's needed
-        _n.reset();                             // destroy last
+        _command_executor.reset();
+        _script_engine.reset();
+        auto output = _n->get_output_handler();
+        _n.reset();
 
 #ifndef __EMSCRIPTEN__
         _repl_state->partial_load_mode = false;
         _repl_state->partial_load_source.clear();
+        _repl_state->partial_language_extension_import = false;
 #endif
         _repl_state->janet_buffer.clear();
         _repl_state->zelph_buffer.clear();
@@ -110,6 +166,7 @@ public:
         _repl_state->accumulating_keyword      = false;
         _repl_state->active_keyword.clear();
         _repl_state->keyword_buffer.clear();
+        _repl_state->keyword_prev_blank = false;
 
         zelph::string::reset_last_node();
 
@@ -117,8 +174,171 @@ public:
         _n->out("Cleared network and re-initialized core nodes.");
     }
 
-    // Member function to delegate to CommandExecutor
-    void process_command(const std::vector<std::string>& cmd);
+    void import_with_partial_policy(const std::string& path, const std::vector<std::string>& args)
+    {
+#ifndef __EMSCRIPTEN__
+        if (_repl_state->partial_load_mode)
+        {
+            const auto descriptor = import_policy::inspect(path);
+            if (!descriptor.partial_language_extension_allowed())
+            {
+                throw std::runtime_error(
+                    "Import blocked in partial load mode: '" + descriptor.resolved_path.string()
+                    + "' is classified as " + import_policy::capability_name(descriptor.capability)
+                    + ". Only installed standard-library language extensions with a trusted capability sidecar are permitted.");
+            }
+
+            const auto before = partial_sparql::fingerprint(*_n);
+            const auto previous_cluster = _n->active_cluster_name();
+            const auto audit_cluster = partial_scope_name("import");
+            const bool previous_import_state = _repl_state->partial_language_extension_import;
+            _n->set_active_cluster(audit_cluster);
+            _repl_state->partial_language_extension_import = true;
+
+            try
+            {
+                _command_executor->import_file(descriptor.resolved_path.string(), args);
+            }
+            catch (...)
+            {
+                _repl_state->partial_language_extension_import = previous_import_state;
+                _n->deactivate_cluster();
+                _n->drop_cluster(audit_cluster);
+                restore_cluster(_n.get(), previous_cluster);
+                const auto restored = partial_sparql::fingerprint(*_n);
+                if (!(restored == before))
+                {
+                    throw std::runtime_error(
+                        "Partial language-extension import failed and graph rollback was incomplete. Before: "
+                        + partial_sparql::describe(before) + "; restored: " + partial_sparql::describe(restored));
+                }
+                throw;
+            }
+
+            _repl_state->partial_language_extension_import = previous_import_state;
+            const auto after_import = partial_sparql::fingerprint(*_n);
+            _n->deactivate_cluster();
+            const auto rolled_back_nodes = _n->drop_cluster(audit_cluster);
+            restore_cluster(_n.get(), previous_cluster);
+            const auto restored = partial_sparql::fingerprint(*_n);
+
+            if (!(after_import == before))
+            {
+                if (!(restored == before))
+                {
+                    throw std::runtime_error(
+                        "Declared language extension mutated the partial graph and rollback was incomplete. Before: "
+                        + partial_sparql::describe(before) + "; restored: " + partial_sparql::describe(restored));
+                }
+                throw std::runtime_error(
+                    "Declared language extension violated the graph-preservation invariant; "
+                    + std::to_string(rolled_back_nodes) + " cluster node(s) were rolled back.");
+            }
+            if (!(restored == before))
+            {
+                throw std::runtime_error("Language-extension import changed graph state outside its audit cluster");
+            }
+
+            _n->diagnostic("Imported partial-safe language extension: " + descriptor.resolved_path.string(), true);
+            return;
+        }
+#endif
+        _command_executor->import_file(path, args);
+    }
+
+    bool invoke_keyword_with_partial_policy(const std::string& keyword, const std::string& text, const bool force)
+    {
+#ifndef __EMSCRIPTEN__
+        if (_repl_state->partial_load_mode)
+        {
+            if (keyword != "sparql")
+                throw std::runtime_error("Registered keyword '" + keyword + "' is not certified for partial-graph execution");
+
+            if (!force && !keyword_text_complete(text))
+                return _script_engine->invoke_keyword(keyword, text, force);
+
+            const auto assessment = partial_sparql::classify(text);
+            if (!assessment.allowed_in_resident_slice)
+            {
+                throw std::runtime_error(
+                    "SPARQL partial execution refused (" + std::string(partial_sparql::query_class_name(assessment.query_class))
+                    + "): " + assessment.reason);
+            }
+
+            _n->out("SPARQL execution metadata:", true);
+            _n->out("  dataset_mode: partial", true);
+            _n->out("  evaluation_scope: resident_graph", true);
+            _n->out("  query_class: " + std::string(partial_sparql::query_class_name(assessment.query_class)), true);
+            _n->out("  row_contract: " + std::string(partial_sparql::result_contract_name(assessment.result_contract)), true);
+            _n->out("  global_completeness: not_established", true);
+
+            // Keep the query hot path proportional to query work, not the
+            // entire resident graph. New query nodes are isolated by the
+            // temporary cluster; this shape check detects surviving changes.
+            const auto before_shape = graph_shape(*_n);
+            const auto previous_cluster = _n->active_cluster_name();
+            const auto query_cluster = partial_scope_name("query");
+            _n->set_active_cluster(query_cluster);
+
+            bool dispatched = false;
+            try
+            {
+                dispatched = _script_engine->invoke_keyword(keyword, text, force);
+            }
+            catch (...)
+            {
+                _n->deactivate_cluster();
+                _n->drop_cluster(query_cluster);
+                restore_cluster(_n.get(), previous_cluster);
+                const auto restored_shape = graph_shape(*_n);
+                if (!(restored_shape == before_shape))
+                    throw std::runtime_error("Partial SPARQL failed and its ephemeral graph rollback was incomplete");
+                throw;
+            }
+
+            _n->deactivate_cluster();
+            const auto ephemeral_nodes = _n->drop_cluster(query_cluster);
+            restore_cluster(_n.get(), previous_cluster);
+            const auto restored_shape = graph_shape(*_n);
+            if (!(restored_shape == before_shape))
+                throw std::runtime_error("Partial SPARQL violated the read-only graph-shape invariant");
+
+            if (dispatched)
+            {
+                _n->out("SPARQL completion metadata:", true);
+                _n->out("  result_set_status: incomplete", true);
+                _n->out("  completeness_reason: resident graph only; routing fixed point not attempted", true);
+                _n->out("  ephemeral_graph_nodes_rolled_back: " + std::to_string(ephemeral_nodes), true);
+            }
+            return dispatched;
+        }
+#endif
+        return _script_engine->invoke_keyword(keyword, text, force);
+    }
+
+    void process_command(const std::vector<std::string>& cmd)
+    {
+#ifndef __EMSCRIPTEN__
+        if (_repl_state->partial_load_mode && !cmd.empty())
+        {
+            if (cmd[0] == ".import")
+            {
+                if (cmd.size() < 2) throw std::runtime_error("Command .import: Missing script path");
+                import_with_partial_policy(cmd[1], std::vector<std::string>(cmd.begin() + 2, cmd.end()));
+                return;
+            }
+            if (cmd[0] == ".auto-run")
+                throw std::runtime_error("Command .auto-run is blocked while a partial graph is loaded");
+        }
+#endif
+        _command_executor->execute(cmd);
+
+        if (_repl_state->reset_requested)
+        {
+            _repl_state->reset_requested = false;
+            reset_reasoning();
+        }
+    }
 
     std::unique_ptr<network::Reasoning> _n;
     std::unique_ptr<ScriptEngine>       _script_engine;
@@ -144,7 +364,7 @@ console::Interactive::~Interactive()
 
 void console::Interactive::process_file(const std::string& file, const std::vector<std::string>& args) const
 {
-    _pImpl->_command_executor->import_file(file, args);
+    _pImpl->import_with_partial_policy(file, args);
 }
 
 std::string console::Interactive::get_version()
@@ -172,24 +392,21 @@ void console::Interactive::process(std::string line) const
     {
         auto& state = _pImpl->_repl_state;
 
-        // --- 0. Keyword block accumulation ---
         if (state->accumulating_keyword)
         {
             if (line.find_first_not_of(" \t\r") == std::string::npos)
             {
                 const bool force = state->keyword_prev_blank;
-
                 _pImpl->_n->profiler_reset_epoch();
 
                 bool dispatched = false;
                 try
                 {
-                    dispatched = _pImpl->_script_engine->invoke_keyword(
+                    dispatched = _pImpl->invoke_keyword_with_partial_policy(
                         state->active_keyword, state->keyword_buffer, force);
                 }
                 catch (...)
                 {
-                    // Leave keyword mode on handler errors so the REPL is not stuck.
                     state->accumulating_keyword = false;
                     state->active_keyword.clear();
                     state->keyword_buffer.clear();
@@ -209,8 +426,6 @@ void console::Interactive::process(std::string line) const
                 }
                 else
                 {
-                    // Handler vetoed (:incomplete): the blank line belongs to the
-                    // text; a second consecutive blank line forces dispatch.
                     state->keyword_buffer += "\n";
                     state->keyword_prev_blank = true;
                 }
@@ -223,16 +438,13 @@ void console::Interactive::process(std::string line) const
             return;
         }
 
-        // --- 1. Comments (work in all modes) ---
         if (!line.empty() && line[0] == '#') return;
 
         size_t first_char_pos = line.find_first_not_of(" \t");
 
-        // --- 2. Commands starting with '.' (work in all modes) ---
         if (first_char_pos != std::string::npos && line[first_char_pos] == '.')
         {
             std::vector<std::string> parts = zelph::string::tokenize_quoted(line);
-
             if (!parts.empty() && !parts[0].empty() && parts[0][0] == '.')
             {
                 _pImpl->_n->profiler_reset_epoch();
@@ -241,20 +453,20 @@ void console::Interactive::process(std::string line) const
             }
         }
 
-        // --- 3. Empty lines ---
         if (first_char_pos == std::string::npos) return;
 
-        // --- 4. Accumulating an incomplete inline Janet expression ---
         if (state->accumulating_inline_janet)
         {
+#ifndef __EMSCRIPTEN__
+            if (state->partial_load_mode && !state->partial_language_extension_import)
+                throw std::runtime_error("Raw Janet input is blocked while a partial graph is loaded");
+#endif
             state->janet_buffer += line + "\n";
-
             if (zelph::ScriptEngine::is_expression_complete(state->janet_buffer))
             {
                 _pImpl->_script_engine->process_janet(state->janet_buffer, false);
                 state->janet_buffer.clear();
                 state->accumulating_inline_janet = false;
-
                 if (state->auto_run)
                     _pImpl->_n->run(true, false, false, true);
             }
@@ -263,25 +475,21 @@ void console::Interactive::process(std::string line) const
 
         std::string trimmed_utf8 = zelph::string::trim(line);
 
-        // --- 5. Mode toggle: bare '%' on a line ---
         if (trimmed_utf8 == "%")
         {
+#ifndef __EMSCRIPTEN__
+            if (state->partial_load_mode && !state->partial_language_extension_import)
+                throw std::runtime_error("Raw Janet input is blocked while a partial graph is loaded");
+#endif
             if (state->script_mode == ScriptMode::Janet)
             {
-                // Leaving Janet block mode: execute accumulated code
                 if (!state->janet_buffer.empty())
                 {
                     _pImpl->_n->profiler_reset_epoch();
-
-                    // Reset block state BEFORE executing: if the code throws, the REPL
-                    // must not stay stuck in Janet block mode (empty prompt, stale
-                    // buffer re-executed on every subsequent '%').
                     const std::string code = state->janet_buffer;
                     state->janet_buffer.clear();
                     state->script_mode = ScriptMode::Zelph;
-
                     _pImpl->_script_engine->process_janet(code, false);
-
                     if (state->auto_run)
                         _pImpl->_n->run(true, false, false, true);
                 }
@@ -297,19 +505,20 @@ void console::Interactive::process(std::string line) const
             return;
         }
 
-        // --- 6. Inline Janet: '%' followed by code ---
         if (trimmed_utf8[0] == '%')
         {
+#ifndef __EMSCRIPTEN__
+            if (state->partial_load_mode && !state->partial_language_extension_import)
+                throw std::runtime_error("Raw Janet input is blocked while a partial graph is loaded");
+#endif
             std::string janet_code = trimmed_utf8.substr(1);
             janet_code             = zelph::string::trim_left(janet_code);
-
             if (janet_code.empty()) return;
 
             if (zelph::ScriptEngine::is_expression_complete(janet_code))
             {
                 _pImpl->_n->profiler_reset_epoch();
                 _pImpl->_script_engine->process_janet(janet_code, false);
-
                 if (state->auto_run)
                     _pImpl->_n->run(true, false, false, true);
             }
@@ -321,35 +530,42 @@ void console::Interactive::process(std::string line) const
             return;
         }
 
-        // --- 7. Janet block mode: accumulate lines ---
         if (state->script_mode == ScriptMode::Janet)
         {
+#ifndef __EMSCRIPTEN__
+            if (state->partial_load_mode && !state->partial_language_extension_import)
+                throw std::runtime_error("Raw Janet input is blocked while a partial graph is loaded");
+#endif
             state->janet_buffer += line + "\n";
             return;
         }
 
-        // --- 8. Registered syntax keywords (e.g. "sparql")
-        if (!state->accumulating_zelph) // Only when not already accumulating a zelph statement.
+        if (!state->accumulating_zelph)
         {
             size_t      end_of_token = trimmed_utf8.find_first_of(" \t");
             std::string first_token  = trimmed_utf8.substr(0, end_of_token);
             if (_pImpl->_script_engine->has_keyword(first_token))
             {
+#ifndef __EMSCRIPTEN__
+                if (state->partial_load_mode && first_token != "sparql")
+                    throw std::runtime_error("Registered keyword '" + first_token + "' is not certified for partial-graph execution");
+#endif
                 state->active_keyword       = first_token;
                 state->accumulating_keyword = true;
-
-                // Allow content on the same line after the keyword
                 if (end_of_token != std::string::npos)
                 {
                     std::string rest = zelph::string::trim_left(trimmed_utf8.substr(end_of_token));
-                    if (!rest.empty())
-                        state->keyword_buffer = rest + "\n";
+                    if (!rest.empty()) state->keyword_buffer = rest + "\n";
                 }
                 return;
             }
         }
 
-        // --- 9. zelph mode: accumulate until statement is complete, then parse ---
+#ifndef __EMSCRIPTEN__
+        if (state->partial_load_mode && !state->partial_language_extension_import)
+            throw std::runtime_error("Facts, rules, and ordinary Zelph statements are blocked while a partial graph is loaded");
+#endif
+
         if (state->accumulating_zelph)
             state->zelph_buffer += "\n" + line;
         else
@@ -366,7 +582,6 @@ void console::Interactive::process(std::string line) const
         state->accumulating_zelph = false;
 
         std::string transformed = _pImpl->_script_engine->parse_zelph_to_janet(complete_stmt);
-
         if (!transformed.empty())
         {
             _pImpl->_n->profiler_reset_epoch();
@@ -376,15 +591,11 @@ void console::Interactive::process(std::string line) const
         {
             size_t u_first = complete_stmt.find_first_not_of(" \t\n");
             if (u_first != std::string::npos)
-            {
                 throw std::runtime_error("Syntax error: Could not parse statement.");
-            }
         }
 
         if (state->auto_run)
-        {
             _pImpl->_n->run(true, false, false, true);
-        }
     }
     catch (std::exception& ex)
     {
@@ -394,19 +605,7 @@ void console::Interactive::process(std::string line) const
 
 void console::Interactive::import_file(const std::string& file) const
 {
-    _pImpl->_command_executor->import_file(file);
-}
-
-// Delegation method
-void console::Interactive::Impl::process_command(const std::vector<std::string>& cmd)
-{
-    _command_executor->execute(cmd);
-
-    if (_repl_state->reset_requested)
-    {
-        _repl_state->reset_requested = false;
-        reset_reasoning();
-    }
+    _pImpl->import_with_partial_policy(file, {});
 }
 
 void console::Interactive::run(const bool print_deductions, const bool generate_markdown, const bool suppress_repetition) const

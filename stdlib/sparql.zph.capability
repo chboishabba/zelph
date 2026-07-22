@@ -1,0 +1,5 @@
+# Installed import capability for stdlib/sparql.zph.
+version=1
+capability=language-extension
+semantic-entrypoint=sparql
+partial-query-policy=resident-slice-v1

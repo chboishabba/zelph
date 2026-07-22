@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zelph.org/schema/partial-query-manifest-v1.schema.json",
+  "title": "Zelph partial-query manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "dataset", "partitioning", "representationLayers", "shards", "routingIndexes"],
+  "properties": {
+    "schemaVersion": { "const": "zelph-partial-query-manifest-v1" },
+    "dataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "manifestHash"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "sourceRevision": { "type": "string" },
+        "manifestHash": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "partitioning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scheme", "disjoint", "overlapSemantics"],
+      "properties": {
+        "scheme": { "type": "string", "minLength": 1 },
+        "disjoint": { "type": "boolean" },
+        "overlapSemantics": { "enum": ["none", "duplicate-identical-triples", "declared-overlap"] },
+        "globalCoverage": { "type": "boolean", "default": false }
+      }
+    },
+    "representationLayers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["directClaim", "statement", "mainSnak", "qualifier", "reference", "rank"],
+      "properties": {
+        "directClaim": { "type": "boolean" },
+        "statement": { "type": "boolean" },
+        "mainSnak": { "type": "boolean" },
+        "qualifier": { "type": "boolean" },
+        "reference": { "type": "boolean" },
+        "rank": { "type": "boolean" }
+      }
+    },
+    "shards": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/shard" } },
+    "routingIndexes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/routingIndex" } },
+    "fallback": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowedForCompleteness": { "type": "boolean", "default": false },
+        "mode": { "type": "string" }
+      }
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "value"],
+      "properties": {
+        "algorithm": { "enum": ["sha256", "blake3"] },
+        "value": { "type": "string", "pattern": "^[A-Fa-f0-9]+$" }
+      }
+    },
+    "transport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri"],
+      "properties": {
+        "uri": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string" },
+        "etag": { "type": "string" }
+      }
+    },
+    "range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "minimum", "maximum"],
+      "properties": {
+        "kind": { "enum": ["subject", "predicate", "object", "node", "name", "byte"] },
+        "minimum": { "type": ["integer", "string"] },
+        "maximum": { "type": ["integer", "string"] },
+        "inclusiveMaximum": { "type": "boolean", "default": true }
+      }
+    },
+    "shard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "byteSize", "digest", "transports", "layers", "ranges"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "byteSize": { "type": "integer", "minimum": 0 },
+        "formatVersion": { "type": "string" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "transports": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/transport" } },
+        "layers": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["directClaim", "statement", "mainSnak", "qualifier", "reference", "rank", "names"] }
+        },
+        "ranges": { "type": "array", "items": { "$ref": "#/$defs/range" } },
+        "overlaps": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+      }
+    },
+    "routingIndex": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "key", "exhaustive", "digest", "transports"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "key": { "enum": ["subject", "subjectPredicate", "predicate", "objectPredicate", "name", "global"] },
+        "layers": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["directClaim", "statement", "mainSnak", "qualifier", "reference", "rank", "names"] }
+        },
+        "exhaustive": { "type": "boolean" },
+        "formatVersion": { "type": "string" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "transports": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/transport" } }
+      }
+    }
+  }
+}

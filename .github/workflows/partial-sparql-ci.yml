@@ -1,0 +1,31 @@
+name: Partial SPARQL CI
+
+on:
+  push:
+    branches:
+      - agent/partial-sparql-completeness
+  pull_request:
+    paths:
+      - 'src/lib/**'
+      - 'src/test/**'
+      - 'stdlib/**'
+      - 'docs/partial-sparql.md'
+      - 'docs/schema/partial-query-manifest-v1.schema.json'
+      - '.github/workflows/partial-sparql-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DZELPH_BUILD_APP=OFF -DZELPH_BUILD_TESTS=ON
+      - name: Build
+        run: cmake --build build --parallel 2
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
