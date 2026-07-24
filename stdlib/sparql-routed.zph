@@ -1,0 +1,27 @@
+# Routed partial-query execution strategy for sparql.zph.
+#
+# Loaded as a trusted companion only when SPARQL is imported while a manifest-
+# backed partial graph is active. The grammar and semantics remain defined by
+# sparql.zph; this module changes only the BGP physical strategy.
+%
+
+(def resident-eval-bgp-block eval-bgp-block)
+
+(set eval-bgp-block
+  (fn [triples solutions]
+    # Evaluate triples in source order. Every single-pattern call uses the
+    # existing direct targets/sources fast path when one end is bound. New
+    # bindings therefore become anchors for the following triple and can cause
+    # its hosted shard obligations to be routed before evaluation continues.
+    #
+    # A fully-bound triple uses zelph/exists, whose native implementation is
+    # route-aware in a partial-query session. A genuinely unanchored first
+    # pattern remains rejected by the C++ semantic classifier.
+    (var sols solutions)
+    (each triple triples
+      (when (empty? sols) (break))
+      (set sols (resident-eval-bgp-block @[triple] sols)))
+    sols))
+
+"Routed SPARQL join strategy loaded."
+%
