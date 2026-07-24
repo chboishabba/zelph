@@ -84,7 +84,7 @@ namespace zelph::network
             return result;
         }
 
-        uint64_t file_size(const std::filesystem::path& path)
+        uint64_t verified_file_size(const std::filesystem::path& path)
         {
             std::error_code error;
             const auto size = std::filesystem::file_size(path, error);
@@ -94,7 +94,7 @@ namespace zelph::network
 
         std::string verify(const std::filesystem::path& path, const ObjectRequest& request)
         {
-            const auto size = file_size(path);
+            const auto size = verified_file_size(path);
             if (request.length && size != request.length)
                 throw std::runtime_error("Partial-query object size mismatch for " + request.uri
                                          + ": expected " + std::to_string(request.length)
@@ -217,7 +217,7 @@ namespace zelph::network
                 result.sha256 = verify(cache_path, request);
                 result.verify_milliseconds = millis_since(verify_started);
                 result.local_path = cache_path;
-                result.byte_size = file_size(cache_path);
+                result.byte_size = verified_file_size(cache_path);
                 result.cache_disposition = CacheDisposition::verified_hit;
                 result.materialize_milliseconds = millis_since(started);
                 std::error_code ignored;
@@ -268,7 +268,7 @@ namespace zelph::network
             result.verify_milliseconds = millis_since(verify_started);
             if (materialized != cache_path) publish_atomically(materialized, cache_path);
             result.local_path = cache_path;
-            result.byte_size = file_size(cache_path);
+            result.byte_size = verified_file_size(cache_path);
             result.cache_disposition = disposition;
             result.materialize_milliseconds = millis_since(started);
             std::error_code ignored;
@@ -293,7 +293,7 @@ namespace zelph::network
         for (const auto& item : std::filesystem::directory_iterator(verified_root()))
         {
             if (!item.is_regular_file() || item.path().extension() != ".body") continue;
-            const uint64_t size = file_size(item.path());
+            const uint64_t size = verified_file_size(item.path());
             total += size;
             entries.push_back({item.path(), size, item.last_write_time()});
         }

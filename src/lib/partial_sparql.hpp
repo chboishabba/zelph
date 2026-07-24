@@ -179,9 +179,12 @@ namespace zelph::console::partial_sparql
         assessment.recursive_path = std::regex_search(
             upper, std::regex(R"(((?:[A-Z][A-Z0-9_-]*:)?[A-Z][A-Z0-9_-]*[+*])(?=\s|/|\?|\.|\}))"));
 
+        const auto where = upper.find("WHERE");
+        const auto group = upper.find('{', where);
         const std::regex unanchored_initial(
-            R"(\{\s*(\?[A-Z_][A-Z0-9_-]*)\s+([^\s{}]+)\s+(\?[A-Z_][A-Z0-9_-]*))");
-        assessment.has_global_scan = std::regex_search(upper, unanchored_initial);
+            R"(^\s*(\?[A-Z_][A-Z0-9_-]*)\s+([^\s{}]+)\s+(\?[A-Z_][A-Z0-9_-]*))");
+        assessment.has_global_scan = group != std::string::npos
+                                  && std::regex_search(upper.substr(group + 1), unanchored_initial);
 
         if (assessment.has_global_scan)
         {

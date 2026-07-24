@@ -1369,6 +1369,28 @@ namespace zelph::network
             return false;
         }
 
+        inline bool route_entry_matches_nodes(const std::string_view object_json,
+                                              const std::vector<uint64_t>& requested_nodes)
+        {
+            std::vector<uint64_t> nodes;
+            if (parse_json_number_array_field(object_json, "nodes", nodes))
+            {
+                for (const uint64_t node : requested_nodes)
+                    if (array_contains_uint64(nodes, node)) return true;
+                return false;
+            }
+
+            const auto range = find_json_object(object_json, "range");
+            uint64_t minimum = 0;
+            uint64_t maximum = 0;
+            if (range.empty() || !parse_json_number_field(range, "min", minimum)
+                || !parse_json_number_field(range, "max", maximum) || minimum > maximum)
+                throw std::runtime_error("nodeRouteIndex entry requires nodes or an inclusive range");
+            for (const uint64_t node : requested_nodes)
+                if (node >= minimum && node <= maximum) return true;
+            return false;
+        }
+
         inline void collect_route_section_matches(std::string_view                             routing_obj,
                                                   const std::string&                           section_name,
                                                   const std::function<void(std::string_view)>& visitor)
@@ -1448,16 +1470,14 @@ namespace zelph::network
                 collect_route_section_matches(routing_obj, "left", [&](std::string_view object_json)
                                               {
                         uint64_t chunk_index = 0;
-                        std::vector<uint64_t> nodes;
-                        if (!parse_json_number_field(object_json, "chunkIndex", chunk_index)
-                            || !parse_json_number_array_field(object_json, "nodes", nodes))
+                        if (!parse_json_number_field(object_json, "chunkIndex", chunk_index))
                         {
                             throw std::runtime_error("Malformed nodeRouteIndex left entry");
                         }
     
                         for (uint64_t route_node : selection.route_nodes)
                         {
-                            if (array_contains_uint64(nodes, route_node))
+                            if (route_entry_matches_nodes(object_json, {route_node}))
                             {
                                 resolved.left.insert(static_cast<uint32_t>(chunk_index));
                                 resolved.any_match = true;
@@ -1468,16 +1488,14 @@ namespace zelph::network
                 collect_route_section_matches(routing_obj, "right", [&](std::string_view object_json)
                                               {
                         uint64_t chunk_index = 0;
-                        std::vector<uint64_t> nodes;
-                        if (!parse_json_number_field(object_json, "chunkIndex", chunk_index)
-                            || !parse_json_number_array_field(object_json, "nodes", nodes))
+                        if (!parse_json_number_field(object_json, "chunkIndex", chunk_index))
                         {
                             throw std::runtime_error("Malformed nodeRouteIndex right entry");
                         }
     
                         for (uint64_t route_node : selection.route_nodes)
                         {
-                            if (array_contains_uint64(nodes, route_node))
+                            if (route_entry_matches_nodes(object_json, {route_node}))
                             {
                                 resolved.right.insert(static_cast<uint32_t>(chunk_index));
                                 resolved.any_match = true;
@@ -1488,16 +1506,14 @@ namespace zelph::network
                 collect_route_section_matches(routing_obj, "nameOfNode", [&](std::string_view object_json)
                                               {
                         uint64_t chunk_index = 0;
-                        std::vector<uint64_t> nodes;
-                        if (!parse_json_number_field(object_json, "chunkIndex", chunk_index)
-                            || !parse_json_number_array_field(object_json, "nodes", nodes))
+                        if (!parse_json_number_field(object_json, "chunkIndex", chunk_index))
                         {
                             throw std::runtime_error("Malformed nodeRouteIndex nameOfNode entry");
                         }
     
                         for (uint64_t route_node : selection.route_nodes)
                         {
-                            if (array_contains_uint64(nodes, route_node))
+                            if (route_entry_matches_nodes(object_json, {route_node}))
                             {
                                 resolved.name_of_node.insert(static_cast<uint32_t>(chunk_index));
                                 resolved.any_match = true;

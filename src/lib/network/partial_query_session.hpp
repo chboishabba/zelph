@@ -39,6 +39,7 @@ namespace zelph::network
         void begin_query(const std::string& normalized_query,
                          const std::vector<std::string>& required_layers,
                          partial_query::RowContract contract);
+        void add_result_rows(uint64_t rows);
         std::string finish_query(bool evaluation_fixed_point, uint64_t result_rows = 0);
         std::string status_json() const;
         bool active_query() const { return _query_active; }

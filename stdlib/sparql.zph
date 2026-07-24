@@ -572,16 +572,7 @@
         bound))
     term))
 
-(defn eval-bgp-block
-  "Evaluate a set of simple (non-path) triples against existing partial
-   solutions one solution at a time. A single triple with a concrete
-   predicate and exactly one free end is answered by a direct adjacency
-   lookup (zelph/targets / zelph/sources) - O(deg(node)) instead of a
-   scan over all facts of the predicate per solution, no pattern facts
-   are created in the graph and no engine caches are invalidated.
-   Everything else goes through one conjunction query via the
-   unification engine.
-   triples: array of [s p o] resolved-term tuples."
+(var eval-bgp-block (fn
   [triples solutions]
   (if (empty? triples)
     solutions
@@ -638,7 +629,7 @@
                   (each src (zelph/sources (as-node p) (as-node o))
                     (push-binding sol var-syms src))))
               (run-unification sol args-per-triple var-syms)))))
-      out)))
+      out))))
 
 (defn closure-set
   "Build a membership table from a closure array. Keys are the zelph/node
@@ -1244,6 +1235,7 @@
 
       (def [projected proj-vars]
         (prof "total eval" (fn [] (eval-select select-node prefixes))))
+      (zelph/partial-result-batch (length projected))
       (format-results projected proj-vars))))
 
 (zelph/register-keyword "sparql" sparql-handler)

@@ -217,6 +217,7 @@ namespace zelph::network
         void begin_partial_query(const std::string& query,
                                  const std::vector<std::string>& layers,
                                  partial_query::RowContract contract) const;
+        void add_partial_result_rows(uint64_t rows) const;
         std::string finish_partial_query(bool evaluation_fixed_point, uint64_t result_rows = 0) const;
         std::string partial_query_status_json() const;
         uintptr_t partial_query_instance_token() const;

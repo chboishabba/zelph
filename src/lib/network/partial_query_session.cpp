@@ -435,6 +435,14 @@ namespace zelph::network
         emit_new_events();
     }
 
+    void PartialQuerySession::add_result_rows(const uint64_t rows)
+    {
+        std::lock_guard lock(_mutex);
+        if (!_query_active || !rows) return;
+        _runtime.add_result_rows(rows, _row_contract);
+        emit_new_events();
+    }
+
     std::string PartialQuerySession::finish_query(const bool evaluation_fixed_point, const uint64_t result_rows)
     {
         std::lock_guard lock(_mutex);
@@ -468,6 +476,7 @@ namespace zelph::network
             << ",\"loaded_shards\":" << certificate.loaded_shards
             << ",\"failed_shards\":" << certificate.failed_shards
             << ",\"unresolved_obligations\":" << certificate.unresolved_obligations
+            << ",\"result_rows\":" << metrics.result_rows
             << ",\"bytes_fetched\":" << metrics.bytes_fetched
             << ",\"cache_hits\":" << metrics.cache_hits
             << ",\"routing_ms\":" << metrics.routing_lookup_milliseconds
@@ -538,6 +547,11 @@ namespace zelph::network
                                     const partial_query::RowContract contract) const
     {
         if (auto* session = find_session(this)) session->begin_query(query, layers, contract);
+    }
+
+    void Zelph::add_partial_result_rows(const uint64_t rows) const
+    {
+        if (auto* session = find_session(this)) session->add_result_rows(rows);
     }
 
     std::string Zelph::finish_partial_query(const bool evaluation_fixed_point, const uint64_t result_rows) const

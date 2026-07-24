@@ -82,6 +82,11 @@ TEST_CASE("partial SPARQL classifier separates streaming and finalised query cla
     CHECK(minus.allowed_with_routed_coverage);
     CHECK(minus.requires_complete_coverage);
 
+    const auto optional = classify("SELECT ?x ?d WHERE { ?x wdt:P31 wd:Q5 . OPTIONAL { ?x wdt:P570 ?d . } }");
+    CHECK(optional.query_class == QueryClass::non_monotone);
+    CHECK(optional.allowed_with_routed_coverage);
+    CHECK_FALSE(optional.has_global_scan);
+
     const auto count = classify("SELECT (COUNT(?x) AS ?n) WHERE { ?x wdt:P31 wd:Q5 . }");
     CHECK(count.query_class == QueryClass::aggregate);
     CHECK(count.result_contract == ResultContract::withheld_until_complete);

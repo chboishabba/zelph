@@ -103,12 +103,12 @@ sparql
 
 
 def q_values(output: str) -> list[str]:
-    values = re.findall(r"\|\s*(Q[A-Za-z0-9]+)\s*\|", output)
+    values = re.findall(r"(?m)^\s*(Q[A-Za-z0-9]+)(?:\s|$)", output)
     return sorted(set(values))
 
 
 def numeric_values(output: str) -> list[int]:
-    return [int(value) for value in re.findall(r"\|\s*([0-9]+)\s*\|", output)]
+    return [int(value) for value in re.findall(r"(?m)^\s*([0-9]+)\s*$", output)]
 
 
 def assert_equivalent(executable: Path, cwd: Path, full_load: str, routed_load: str,
@@ -128,6 +128,8 @@ def assert_equivalent(executable: Path, cwd: Path, full_load: str, routed_load: 
         raise AssertionError(f"routed query did not load a shard on demand:\n{routed_output}")
     if "Routed SPARQL join strategy loaded" not in routed_output:
         raise AssertionError(f"partial SPARQL companion was not loaded:\n{routed_output}")
+    if '"type":"result_batch"' not in routed_output:
+        raise AssertionError(f"routed query did not report its result batch:\n{routed_output}")
     return routed_output
 
 
@@ -219,11 +221,19 @@ Q2 P570 QD
 
         minus_output = assert_equivalent(
             executable, root, full_load, routed_load,
-            "SELECT ?x WHERE { ?x wdt:P31 wd:Q5 . MINUS { ?x wdt:P570 ?d . } }",
+            "SELECT ?x WHERE { ?x wdt:P31 wd:Q5 . MINUS { ?x wdt:P570 wd:QD . } }",
             q_values,
         )
         if q_values(minus_output) != ["Q1"]:
             raise AssertionError(f"unexpected MINUS result: {q_values(minus_output)}")
+
+        optional_output = assert_equivalent(
+            executable, root, full_load, routed_load,
+            "SELECT ?x ?d WHERE { ?x wdt:P31 wd:Q5 . OPTIONAL { ?x wdt:P570 ?d . } }",
+            q_values,
+        )
+        if q_values(optional_output) != ["Q1", "Q2"]:
+            raise AssertionError(f"unexpected OPTIONAL result: {q_values(optional_output)}")
 
         missing_layer_query = "SELECT ?s WHERE { wd:Q1 p:P39 ?s . ?s pq:P580 ?date . }"
         refused = run_zelph(

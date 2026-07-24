@@ -97,21 +97,6 @@ if(NOT EMSCRIPTEN)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/lib/network/verified_object_store.cpp
     )
 
-    # Preserve the established resident implementation under internal names;
-    # routed_graph_api.cpp supplies the unchanged public API and delegates to
-    # these methods after satisfying manifest obligations.
-    set_property(SOURCE network/zelph.cpp DIRECTORY src/lib APPEND PROPERTY COMPILE_DEFINITIONS
-        node=node_resident
-        check_fact=check_fact_resident
-        get_fact_objects=get_fact_objects_resident
-        get_fact_subjects=get_fact_subjects_resident
-        transitive_targets=transitive_targets_resident
-        transitive_sources=transitive_sources_resident
-    )
-    set_property(SOURCE network/zelph_names.cpp DIRECTORY src/lib APPEND PROPERTY COMPILE_DEFINITIONS
-        get_node=get_node_resident
-        get_name=get_name_resident
-    )
 endif()
 
 if(ZELPH_WASM)
