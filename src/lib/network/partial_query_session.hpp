@@ -8,6 +8,7 @@ Live bridge between hosted manifests and ordinary Zelph graph lookups.
 #ifndef __EMSCRIPTEN__
 #include "partial_query_manifest.hpp"
 #include "partial_query_runtime.hpp"
+#include "sha256.hpp"
 #include "verified_object_store.hpp"
 #include "zelph.hpp"
 
