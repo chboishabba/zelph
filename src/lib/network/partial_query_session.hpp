@@ -34,6 +34,7 @@ namespace zelph::network
         void ensure_incoming(Node predicate, Node object, uint64_t depth = 0);
 
         bool supports_layers(const std::vector<std::string>& layers) const;
+        bool certifiable() const { return _manifest.certifiable(); }
         void begin_query(const std::string& normalized_query,
                          const std::vector<std::string>& required_layers,
                          partial_query::RowContract contract);
@@ -76,7 +77,6 @@ namespace zelph::network
         partial_query::Runtime _runtime;
         partial_query::RowContract _row_contract = partial_query::RowContract::sound_lower_bound;
         bool _query_active = false;
-        uint64_t _query_serial = 0;
         size_t _emitted_events = 0;
     };
 } // namespace zelph::network
