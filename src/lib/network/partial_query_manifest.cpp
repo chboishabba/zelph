@@ -103,7 +103,7 @@ namespace zelph::network
                 descriptor.has_source_offset = ref.has_source_offset;
                 descriptor.uri = ref.object_path;
                 descriptor.layer = "directClaim";
-                manifest._chunks.emplace(std::make_pair(section, ref.chunk_index), std::move(descriptor));
+                manifest.add_chunk(std::move(descriptor));
             }
         }
     }
@@ -201,7 +201,7 @@ namespace zelph::network
                 descriptor.has_source_offset = detail::find_json_key_position(object, "sourceOffset") != std::string_view::npos;
                 if (descriptor.id.empty() || descriptor.uri.empty() || descriptor.sha256.empty())
                     throw std::runtime_error("Canonical shard requires id, transport URI, and SHA-256 digest");
-                result._chunks[{descriptor.section, descriptor.chunk_index}] = std::move(descriptor);
+                result.add_chunk(std::move(descriptor));
             });
 
             const auto indexes = detail::find_json_array(text, "routingIndexes");
@@ -240,7 +240,6 @@ namespace zelph::network
         add_legacy_chunks(result, PartialChunkSection::right, result._legacy.right);
         add_legacy_chunks(result, PartialChunkSection::name_of_node, result._legacy.name_of_node);
         add_legacy_chunks(result, PartialChunkSection::node_of_name, result._legacy.node_of_name);
-
         return result;
     }
 
@@ -252,10 +251,7 @@ namespace zelph::network
         return true;
     }
 
-    bool PartialQueryManifest::layer_available(const std::string& layer) const
-    {
-        return _layers.contains(layer);
-    }
+    bool PartialQueryManifest::layer_available(const std::string& layer) const { return _layers.contains(layer); }
 
     const PartialChunkDescriptor* PartialQueryManifest::chunk(const PartialChunkSection section, const uint32_t index) const
     {
@@ -266,9 +262,13 @@ namespace zelph::network
     std::vector<PartialChunkDescriptor> PartialQueryManifest::chunks(const PartialChunkSection section) const
     {
         std::vector<PartialChunkDescriptor> result;
-        for (const auto& [key, value] : _chunks)
-            if (key.first == section) result.push_back(value);
+        for (const auto& [key, value] : _chunks) if (key.first == section) result.push_back(value);
         return result;
+    }
+
+    void PartialQueryManifest::add_chunk(PartialChunkDescriptor descriptor)
+    {
+        _chunks[{descriptor.section, descriptor.chunk_index}] = std::move(descriptor);
     }
 
     std::string PartialQueryManifest::coverage_summary() const
