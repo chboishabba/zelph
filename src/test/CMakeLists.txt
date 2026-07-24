@@ -23,8 +23,6 @@
 
 include(FetchContent)
 
-# doctest v2.4.12 declares cmake_minimum_required(VERSION 3.1),
-# which newer CMake rejects. Allow it to configure anyway.
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "")
 
 FetchContent_Declare(
@@ -51,18 +49,12 @@ add_executable(zelph_tests
 )
 target_link_libraries(zelph_tests PRIVATE zelph_lib doctest_with_main)
 
-# Mirror the standard library next to the test binary. Same rationale as in
-# src/app; needed independently so tests work when the app target is not
-# built, and so packaged test binaries (Chocolatey, Homebrew) find the
-# stdlib next to themselves. copy_directory is idempotent, so overlapping
-# with the app target's mirror is harmless (same output directory).
 add_custom_command(TARGET zelph_tests POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_SOURCE_DIR}/stdlib
             $<TARGET_FILE_DIR:zelph_tests>/stdlib
     COMMENT "Mirroring zelph standard library next to the test binary")
 
-# suppress doctest specific __COUNTER__ warnings
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     target_compile_options(zelph_tests PRIVATE -Wno-c2y-extensions -Wno-\#warnings)
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
@@ -75,3 +67,18 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 add_test(NAME zelph_tests COMMAND zelph_tests)
+
+# This is deliberately a CLI test rather than another in-process unit test: it
+# serialises a real graph, emits a canonical artifact, starts a fresh process
+# with only the header resident, and compares full and routed SPARQL results.
+if(TARGET zelph)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(
+        NAME routed_partial_cli
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/run_routed_partial_acceptance.py
+                --zelph $<TARGET_FILE:zelph>
+                --source-root ${CMAKE_SOURCE_DIR}
+    )
+    set_tests_properties(routed_partial_cli PROPERTIES TIMEOUT 180)
+endif()

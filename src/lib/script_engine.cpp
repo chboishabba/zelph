@@ -32,8 +32,10 @@ along with zelph. If not, see <https://www.gnu.org/licenses/>.
 #include <janet.h>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <janetconf.h>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <random>
@@ -168,6 +170,8 @@ public:
                                                                                          "(.json/.json.bz2, creates a .bin cache next to it), like the .load command. Main thread only.");
 
         janet_def(_janet_env, "zelph/query", wrap((JanetCFunction)janet_cfun_zelph_query), "(zelph/query node)\nExecute a query and return results as an array of tables.\nEach table maps variable symbols to their bound zelph/node values.\nTakes a zelph/fact containing variables.");
+
+        janet_def(_janet_env, "zelph/partial-result-batch", wrap((JanetCFunction)janet_cfun_zelph_partial_result_batch), "(zelph/partial-result-batch rows)\nReport a completed SPARQL result batch to an active routed partial-query session. Outside such a session this is a no-op.");
 
         janet_def(_janet_env, "zelph/exists", wrap((JanetCFunction)janet_cfun_zelph_exists), "(zelph/exists s p o)\nCheck whether a fact exists without creating it. Returns boolean.");
 
@@ -552,6 +556,24 @@ public:
         Janet           res = janet_wrap_boolean(ans.is_known() ? 1 : 0);
         if (s_instance->_log_janet_functions) s_instance->log_janet_call("zelph/exists", argc, argv, false, res);
         return res;
+    }
+
+    static Janet janet_cfun_zelph_partial_result_batch(int32_t argc, Janet* argv)
+    {
+        janet_fixarity(argc, 1);
+        if (!s_instance) return janet_wrap_nil();
+        if (!janet_checktype(argv[0], JANET_NUMBER))
+            janet_panicf("zelph/partial-result-batch: expected a numeric row count");
+        const double value = janet_unwrap_number(argv[0]);
+        if (value < 0 || value != std::floor(value)
+            || value > static_cast<double>(std::numeric_limits<uint64_t>::max()))
+            janet_panicf("zelph/partial-result-batch: expected a non-negative integral row count");
+        const auto rows = static_cast<uint64_t>(value);
+        if (s_instance->_log_janet_functions) s_instance->log_janet_call("zelph/partial-result-batch", argc, argv, true);
+        s_instance->_n->add_partial_result_rows(rows);
+        Janet result = janet_wrap_nil();
+        if (s_instance->_log_janet_functions) s_instance->log_janet_call("zelph/partial-result-batch", argc, argv, false, result);
+        return result;
     }
 
     // Return the name of a node as a string, or nil if unnamed.

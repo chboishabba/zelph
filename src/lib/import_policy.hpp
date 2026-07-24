@@ -10,33 +10,25 @@ Capability-aware script import policy used by partial-graph sessions.
 
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace zelph::console::import_policy
 {
-    enum class ImportCapability
-    {
-        language_extension,
-        graph_transform,
-        rule_program,
-    };
-
-    enum class DeclarationSource
-    {
-        none,
-        inline_header,
-        installed_sidecar,
-    };
+    enum class ImportCapability { language_extension, graph_transform, rule_program };
+    enum class DeclarationSource { none, inline_header, installed_sidecar };
 
     struct ImportDescriptor
     {
-        ImportCapability      capability = ImportCapability::rule_program;
-        DeclarationSource     declaration_source = DeclarationSource::none;
+        ImportCapability capability = ImportCapability::rule_program;
+        DeclarationSource declaration_source = DeclarationSource::none;
         std::filesystem::path resolved_path;
+        std::filesystem::path declared_path;
         std::filesystem::path declaration_path;
-        bool                  trusted_standard_library = false;
+        bool trusted_standard_library = false;
+        std::vector<std::filesystem::path> companions;
 
         bool partial_language_extension_allowed() const
         {
@@ -50,12 +42,9 @@ namespace zelph::console::import_policy
     {
         switch (capability)
         {
-        case ImportCapability::language_extension:
-            return "language-extension";
-        case ImportCapability::graph_transform:
-            return "graph-transform";
-        case ImportCapability::rule_program:
-            return "rule-program";
+        case ImportCapability::language_extension: return "language-extension";
+        case ImportCapability::graph_transform: return "graph-transform";
+        case ImportCapability::rule_program: return "rule-program";
         }
         return "rule-program";
     }
@@ -74,9 +63,7 @@ namespace zelph::console::import_policy
         auto path_it = canonical_path.begin();
         auto root_it = canonical_root.begin();
         for (; root_it != canonical_root.end(); ++root_it, ++path_it)
-        {
             if (path_it == canonical_path.end() || *path_it != *root_it) return false;
-        }
         return true;
     }
 
@@ -89,7 +76,6 @@ namespace zelph::console::import_policy
 
         std::vector<fs::path> variants{fs::path(raw)};
         if (extension.empty()) variants.emplace_back(raw + ".zph");
-
         for (const auto& variant : variants)
         {
             std::error_code error;
@@ -118,14 +104,21 @@ namespace zelph::console::import_policy
         throw std::runtime_error("Unknown zelph import capability '" + value + "' in " + source.string());
     }
 
+    inline bool trusted_standard_path(const std::filesystem::path& path)
+    {
+        for (const auto& root : platform::get_standard_library_paths())
+            if (path_is_within(path, root)) return true;
+        return false;
+    }
+
     inline bool read_sidecar(const std::filesystem::path& path, ImportDescriptor& result)
     {
         std::ifstream input(path);
         if (!input) return false;
-
         std::string line;
         bool has_version = false;
         bool has_capability = false;
+        std::vector<std::string> companion_names;
         while (std::getline(input, line))
         {
             string::trim_in_place(line);
@@ -147,42 +140,82 @@ namespace zelph::console::import_policy
                 result.capability = parse_capability(value, path);
                 has_capability = true;
             }
-            // Additional keys are forward-compatible metadata.
+            else if (key == "companion")
+            {
+                if (value.empty()) throw std::runtime_error("Empty companion declaration in " + path.string());
+                companion_names.push_back(value);
+            }
         }
         if (!has_version || !has_capability)
             throw std::runtime_error("Import capability sidecar requires version=1 and capability=...: " + path.string());
         result.declaration_source = DeclarationSource::installed_sidecar;
         result.declaration_path = path;
+        for (const auto& name : companion_names)
+        {
+            const auto companion = resolve_script_reference(name);
+            if (companion.extension() != ".zph" || !trusted_standard_path(companion))
+                throw std::runtime_error("Language-extension companion is not an installed standard-library .zph script: " + companion.string());
+            result.companions.push_back(companion);
+        }
         return true;
+    }
+
+    inline std::filesystem::path compose_extension(const std::filesystem::path& primary,
+                                                   const std::vector<std::filesystem::path>& companions)
+    {
+        if (companions.empty()) return primary;
+        std::string identity = canonical_if_possible(primary).string();
+        for (const auto& companion : companions) identity += "\n" + canonical_if_possible(companion).string();
+        const auto key = std::to_string(std::hash<std::string>{}(identity));
+        const auto root = std::filesystem::temp_directory_path() / "zelph-language-extensions-v1";
+        std::filesystem::create_directories(root);
+        const auto output_path = root / (key + ".zph");
+        const auto temporary_path = root / (key + ".tmp");
+
+        std::ofstream output(temporary_path, std::ios::binary | std::ios::trunc);
+        if (!output) throw std::runtime_error("Cannot compose language extension: " + temporary_path.string());
+        auto append = [&](const std::filesystem::path& path)
+        {
+            std::ifstream input(path, std::ios::binary);
+            if (!input) throw std::runtime_error("Cannot read language extension component: " + path.string());
+            output << "# begin composed component: " << path.filename().string() << '\n';
+            output << input.rdbuf();
+            output << "\n# end composed component: " << path.filename().string() << "\n";
+        };
+        append(primary);
+        for (const auto& companion : companions) append(companion);
+        output.close();
+
+        std::error_code error;
+        std::filesystem::rename(temporary_path, output_path, error);
+        if (error)
+        {
+            std::filesystem::remove(output_path, error);
+            error.clear();
+            std::filesystem::rename(temporary_path, output_path, error);
+            if (error) throw std::runtime_error("Cannot publish composed language extension: " + output_path.string());
+        }
+        return output_path;
     }
 
     inline ImportDescriptor inspect(const std::string& raw)
     {
         ImportDescriptor result;
         result.resolved_path = resolve_script_reference(raw);
-
-        for (const auto& root : platform::get_standard_library_paths())
-        {
-            if (path_is_within(result.resolved_path, root))
-            {
-                result.trusted_standard_library = true;
-                break;
-            }
-        }
-
-        // Whole Janet programs are never treated as partial-safe language
-        // extensions. A .zph standard-library module must have an installed
-        // sidecar; arbitrary user scripts cannot self-assert trust.
+        result.declared_path = result.resolved_path;
+        result.trusted_standard_library = trusted_standard_path(result.resolved_path);
         if (result.resolved_path.extension() != ".zph") return result;
 
         const auto sidecar = std::filesystem::path(result.resolved_path.string() + ".capability");
-        if (read_sidecar(sidecar, result)) return result;
+        if (read_sidecar(sidecar, result))
+        {
+            if (result.partial_language_extension_allowed())
+                result.resolved_path = compose_extension(result.declared_path, result.companions);
+            return result;
+        }
 
-        // Inline declarations remain useful for diagnostics and future policy,
-        // but are deliberately insufficient to bypass partial-mode guards.
         std::ifstream input(result.resolved_path);
         if (!input) throw std::runtime_error("Cannot inspect script '" + result.resolved_path.string() + "'");
-
         constexpr const char* prefix = "# zelph-import-capability:";
         std::string line;
         size_t inspected = 0;
@@ -192,7 +225,6 @@ namespace zelph::console::import_policy
             if (line.empty()) continue;
             if (!line.starts_with('#')) break;
             if (!line.starts_with(prefix)) continue;
-
             auto value = line.substr(std::char_traits<char>::length(prefix));
             string::trim_in_place(value);
             result.capability = parse_capability(value, result.resolved_path);

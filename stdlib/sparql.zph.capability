@@ -2,4 +2,5 @@
 version=1
 capability=language-extension
 semantic-entrypoint=sparql
-partial-query-policy=resident-slice-v1
+partial-query-policy=routed-v1
+companion=sparql-routed

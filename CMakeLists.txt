@@ -51,8 +51,6 @@ add_library(project_options INTERFACE)
 option(ZELPH_BUILD_APP   "Build the zelph REPL executable" ${PROJECT_IS_TOP_LEVEL})
 option(ZELPH_BUILD_TESTS "Build zelph tests"               ${PROJECT_IS_TOP_LEVEL})
 
-# WebAssembly playground build. Implies: static lib, no Cap'n Proto
-# persistence, no native app, no test suite. Use via: emcmake cmake ...
 option(ZELPH_WASM "Build the WebAssembly playground" ${EMSCRIPTEN})
 
 if(ZELPH_WASM)
@@ -70,11 +68,6 @@ if(MSVC)
     )
 else()
     if(EMSCRIPTEN)
-        # Wasm exception handling: must be enabled at compile AND link time.
-        # zelph relies on C++ exceptions (contradiction_error, REPL error
-        # paths). -fwasm-exceptions uses native wasm EH instructions (near
-        # zero cost on non-throwing paths) and also selects the matching
-        # wasm-EH based setjmp/longjmp mode that the Janet VM relies on.
         target_compile_options(project_options INTERFACE
                 -fwasm-exceptions -Wall -pedantic
             )
@@ -91,6 +84,20 @@ else()
 endif()
 
 add_subdirectory(src/lib)
+
+# Public headers expose ankerl::unordered_dense types. Propagate the dependency
+# rather than relying on a PRIVATE transitive include path.
+target_link_libraries(zelph_lib PUBLIC unordered_dense::unordered_dense)
+
+if(NOT EMSCRIPTEN)
+    target_sources(zelph_lib PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/lib/network/partial_query_manifest.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/lib/network/partial_query_session.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/lib/network/routed_graph_api.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/lib/network/verified_object_store.cpp
+    )
+
+endif()
 
 if(ZELPH_WASM)
     add_subdirectory(src/wasm)
@@ -109,9 +116,6 @@ if(PROJECT_IS_TOP_LEVEL)
     install(FILES ${CMAKE_SOURCE_DIR}/LICENSE
             DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/licenses/${PROJECT_NAME})
 
-    # Install the zelph standard library (everything under stdlib/) into the
-    # platform data directory, e.g. /usr/share/zelph. No file list is
-    # maintained: whatever lives in stdlib/ is part of the standard library.
     install(DIRECTORY ${CMAKE_SOURCE_DIR}/stdlib/
                     DESTINATION ${CMAKE_INSTALL_DATADIR}/zelph)
 endif()

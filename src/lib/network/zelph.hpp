@@ -29,9 +29,11 @@ along with zelph. If not, see <https://www.gnu.org/licenses/>.
 #include "fact_structure_types.hpp"
 #include "io/output.hpp"
 #include "network.hpp"
+#include "partial_query_runtime.hpp"
 
 #include <zelph_export.h>
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <unordered_map>
@@ -43,10 +45,8 @@ namespace zelph::network
     using name_of_node_map = ankerl::unordered_dense::map<Node, std::string_view>;
     using node_of_name_map = ankerl::unordered_dense::map<std::string_view, Node>;
 
-    // The core semantic network engine. It manages the in-memory graph structure (nodes, edges),
-    // provides low-level API for graph manipulation, and handles raw binary serialization (I/O)
-    // of the network state via load_from_file/save_to_file. It is agnostic to the semantic meaning
-    // or source format of the data.
+    enum class PartialChunkSection;
+
     class ZELPH_EXPORT Zelph
     {
     public:
@@ -79,29 +79,21 @@ namespace zelph::network
 
         class AllNodeView
         {
-        private:
             const adjacency_map& _left_ref;
-
         public:
             explicit AllNodeView(const adjacency_map& left) : _left_ref(left) {}
             auto begin() const { return _left_ref.begin(); }
             auto end() const { return _left_ref.end(); }
-            // Usage: for (auto it = view.begin(); it != view.end(); ++it) { Node nd = it->first; }
         };
 
         class LangNodeView
         {
-        private:
             const node_of_name_map& _rev_map;
-
         public:
             explicit LangNodeView(const node_of_name_map& rev) : _rev_map(rev) {}
             auto begin() const { return _rev_map.begin(); }
             auto end() const { return _rev_map.end(); }
-            // Usage: for (auto it = view.begin(); it != view.end(); ++it) { Node nd = it->second; }
         };
-
-        // --- Implemented in zelph.cpp (core graph operations) ---
 
         static std::string   get_version();
         Node                 var() const;
@@ -118,8 +110,8 @@ namespace zelph::network
         adjacency_set        filter(const adjacency_set& source, Node target) const;
         adjacency_set        filter(Node fact, Node relationType, Node target) const;
         static adjacency_set filter(const adjacency_set& source, const std::function<bool(const Node nd)>& f);
-        adjacency_set        get_left(const Node b) const;
-        adjacency_set        get_right(const Node b) const;
+        adjacency_set        get_left(Node b) const;
+        adjacency_set        get_right(Node b) const;
         bool                 has_left_edge(Node b, Node a) const;
         bool                 has_right_edge(Node a, Node b) const;
         static Node          create_hash(const adjacency_set& vec);
@@ -132,7 +124,7 @@ namespace zelph::network
         Node                 list(const std::vector<std::string>& elements);
         Node                 set(const std::unordered_set<Node>& elements);
         Node                 parse_fact(Node rule, adjacency_set& deductions, Node parent = 0) const;
-        Node                 parse_relation(const Node rule) const;
+        Node                 parse_relation(Node rule) const;
         Node                 count() const;
         AllNodeView          get_all_nodes_view() const;
         LangNodeView         get_lang_nodes_view(const std::string& lang) const;
@@ -157,38 +149,20 @@ namespace zelph::network
         void                 log(int depth, const std::string& category, const std::string& message) const;
         bool                 use_parallel() const { return _use_parallel; }
         void                 toggle_parallel() { _use_parallel = !_use_parallel; }
-        void                 set_synapse(const Node from, const Node to, const double weight) const;
-        bool                 has_synapse(const Node from, const Node to) const;
+        void                 set_synapse(Node from, Node to, double weight) const;
+        bool                 has_synapse(Node from, Node to) const;
         double               edge_weight(Node from, Node to, double fallback = 1.0) const;
         void                 set_edge_weight(Node from, Node to, double weight) const;
 
-        // --- Number display (registered digit alphabet) ---
-        // A script may register the digit alphabet of its number
-        // representation, in ascending order of value. node_to_string then
-        // renders cons lists consisting solely of these digit nodes as
-        // decimal &-literals -- the exact inverse of the &-input syntax
-        // (zelph/number). An empty vector disables the feature. Any other
-        // list keeps the generic <...> display, so cons lists stay
-        // general-purpose. See stdlib/arithmetic.zph.
         void                                                      set_number_digits(const std::vector<Node>& digits_ascending);
         std::shared_ptr<const std::unordered_map<Node, uint32_t>> number_digit_values() const;
 
-        // --- Fact-creation observer (semi-naive evaluation) ---
-        // Invoked from fact() exactly when a NEW fact node is materialized
-        // (never for pre-existing facts). Reasoning::run uses it to capture
-        // the delta of facts created during a reasoning pass -- including
-        // inner facts materialized as side effects of instantiate_fact,
-        // which a deduce()-level hook would miss. Empty by default and
-        // outside of runs. Deliberately NOT invoked by
-        // fact_import_trusted_single_object (bulk import path).
         using FactCreationObserver = std::function<void(Node relation, Node predicate)>;
         void set_fact_creation_observer(FactCreationObserver observer);
 
-        // --- Implemented in zelph_names.cpp (name management) ---
-
         void                     set_name(Node node, const std::string& name, std::string lang, bool merge_on_conflict);
         Node                     set_name(const std::string& name_in_current_lang, const std::string& name_in_given_lang, std::string lang);
-        std::string              get_name(const Node node, std::string lang = "", const bool fallback = false) const;
+        std::string              get_name(Node node, std::string lang = "", bool fallback = false) const;
         std::string              get_formatted_name(Node node, const std::string& lang) const;
         bool                     has_name(Node node, const std::string& lang) const;
         void                     remove_name(Node node, std::string lang = "");
@@ -207,8 +181,6 @@ namespace zelph::network
         size_t                   get_node_of_name_size(const std::string& lang) const;
         size_t                   language_count() const;
 
-        // --- Implemented in zelph_maintenance.cpp (cleanup, rules, persistence) ---
-
         void          cleanup_isolated(size_t& removed_count) const;
         size_t        cleanup_names() const;
         void          remove_node(Node node) const;
@@ -218,11 +190,46 @@ namespace zelph::network
         void          save_to_file(const std::string& filename) const;
         void          load_from_file(const std::string& filename) const;
         void          load_from_file(const std::string& filename, const BinChunkSelection& selection, bool skip_payload = false) const;
-        void          load_from_manifest(const std::string&       manifest_path,
+        void          load_from_manifest(const std::string& manifest_path,
                                          const BinChunkSelection& selection,
-                                         const std::string&       shard_root        = "",
-                                         const std::string&       bin_path_override = "",
-                                         bool                     skip_payload      = false) const;
+                                         const std::string& shard_root = "",
+                                         const std::string& bin_path_override = "",
+                                         bool skip_payload = false) const;
+
+        void append_partial_chunk(PartialChunkSection section,
+                                  const std::string& verified_path,
+                                  uint64_t source_offset,
+                                  uint32_t chunk_index,
+                                  uint32_t section_count) const;
+        void configure_partial_query_session(const std::string& manifest_source,
+                                             const BinChunkSelection& initial_selection,
+                                             const std::string& shard_root,
+                                             const std::string& source_bin_override,
+                                             bool initial_payload_loaded) const;
+        void clear_partial_query_session() const;
+        bool partial_query_active() const;
+        bool partial_query_certifiable() const;
+        bool ensure_partial_name(const std::string& name, const std::string& language) const;
+        void ensure_partial_node_names(Node node) const;
+        void ensure_partial_outgoing(Node subject, Node predicate, uint64_t depth = 0) const;
+        void ensure_partial_incoming(Node predicate, Node object, uint64_t depth = 0) const;
+        bool partial_query_supports_layers(const std::vector<std::string>& layers) const;
+        void begin_partial_query(const std::string& query,
+                                 const std::vector<std::string>& layers,
+                                 partial_query::RowContract contract) const;
+        void add_partial_result_rows(uint64_t rows) const;
+        std::string finish_partial_query(bool evaluation_fixed_point, uint64_t result_rows = 0) const;
+        std::string partial_query_status_json() const;
+        uintptr_t partial_query_instance_token() const;
+
+        Node          node_resident(const std::string& name, std::string lang = "");
+        Answer        check_fact_resident(Node subject, Node predicate, const adjacency_set& objects) const;
+        adjacency_set get_fact_objects_resident(Node subject, Node predicate) const;
+        adjacency_set get_fact_subjects_resident(Node predicate, Node object) const;
+        adjacency_set transitive_targets_resident(Node start, Node predicate, bool include_start) const;
+        adjacency_set transitive_sources_resident(Node target, Node predicate, bool include_target) const;
+        std::string   get_name_resident(Node node, std::string lang = "", bool fallback = false) const;
+        Node          get_node_resident(const std::string& name, std::string lang = "") const;
 
         void                                        set_active_cluster(const std::string& name) const;
         void                                        deactivate_cluster() const;
@@ -231,10 +238,8 @@ namespace zelph::network
         size_t                                      drop_cluster(const std::string& name) const;
         bool                                        merge_cluster(const std::string& from, const std::string& to) const;
 
-        // --- Members ---
-
         class Impl;
-        Impl* const _pImpl; // must stay at top of members list because of initialization order
+        Impl* const _pImpl;
 
         const struct PredefinedNode
         {
@@ -252,11 +257,11 @@ namespace zelph::network
 
     protected:
         std::string                                               _lang{"en"};
-        std::unordered_map<network::Node, std::string>            _core_names_by_node;
-        std::unordered_map<std::string, network::Node>            _core_names_by_name;
+        std::unordered_map<Node, std::string>                     _core_names_by_node;
+        std::unordered_map<std::string, Node>                     _core_names_by_name;
         bool                                                      _use_parallel{true};
         std::shared_ptr<const std::unordered_map<Node, uint32_t>> _number_digits;
         mutable std::shared_mutex                                 _smtx_number_digits;
         FactCreationObserver                                      _on_fact_created;
     };
-}
+} // namespace zelph::network

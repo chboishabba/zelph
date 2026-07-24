@@ -114,7 +114,7 @@ void Zelph::set_lang(const std::string& lang)
     }
 }
 
-Node Zelph::node(const std::string& name, std::string lang)
+Node Zelph::node_resident(const std::string& name, std::string lang)
 {
     if (lang.empty()) lang = _lang;
     if (name.empty())
@@ -208,7 +208,7 @@ adjacency_set Zelph::get_sources(const Node relationType, const Node target, con
 // Topology: subject <-> relation_node (bidirectional), object -> relation_node,
 // relation_node -> predicate. Moved here from the Janet binding layer, which
 // previously duplicated this topology knowledge.
-adjacency_set Zelph::get_fact_objects(const Node subject, const Node predicate) const
+adjacency_set Zelph::get_fact_objects_resident(const Node subject, const Node predicate) const
 {
     adjacency_set objects;
 
@@ -239,7 +239,7 @@ adjacency_set Zelph::get_fact_objects(const Node subject, const Node predicate) 
 // Find all subjects S such that the fact (S predicate object) exists.
 // The directional counterpart of get_fact_objects: object must participate
 // in the pure object role (in left(rel) but NOT in right(rel)).
-adjacency_set Zelph::get_fact_subjects(const Node predicate, const Node object) const
+adjacency_set Zelph::get_fact_subjects_resident(const Node predicate, const Node object) const
 {
     adjacency_set subjects;
 
@@ -272,7 +272,7 @@ adjacency_set Zelph::get_fact_subjects(const Node predicate, const Node object) 
 // Two-stage strategy: a lock-once direct traversal handles small closures
 // without any index; once its scan budget is exhausted (hub nodes), the
 // closure switches to the cached per-predicate index.
-adjacency_set Zelph::transitive_targets(const Node start, const Node predicate, const bool include_start) const
+adjacency_set Zelph::transitive_targets_resident(const Node start, const Node predicate, const bool include_start) const
 {
     adjacency_set result;
     if (_pImpl->try_transitive_direct(start, predicate, include_start, /*forward*/ true, kDirectClosureScanBudget, result))
@@ -284,7 +284,7 @@ adjacency_set Zelph::transitive_targets(const Node start, const Node predicate, 
 }
 
 // Transitive closure following the predicate backward (object -> subject).
-adjacency_set Zelph::transitive_sources(const Node target, const Node predicate, const bool include_target) const
+adjacency_set Zelph::transitive_sources_resident(const Node target, const Node predicate, const bool include_target) const
 {
     adjacency_set result;
     if (_pImpl->try_transitive_direct(target, predicate, include_target, /*forward*/ false, kDirectClosureScanBudget, result))
@@ -379,7 +379,7 @@ bool Zelph::is_var(Node a)
     return Network::is_var(a);
 }
 
-Answer Zelph::check_fact(const Node subject, const Node predicate, const adjacency_set& objects) const
+Answer Zelph::check_fact_resident(const Node subject, const Node predicate, const adjacency_set& objects) const
 {
     bool known = false;
 

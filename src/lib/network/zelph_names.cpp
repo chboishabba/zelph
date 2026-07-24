@@ -482,7 +482,7 @@ Node Zelph::set_name(const std::string& name_in_current_lang,
     return result_node;
 }
 
-std::string Zelph::get_name(const Node node, std::string lang, const bool fallback) const
+std::string Zelph::get_name_resident(const Node node, std::string lang, const bool fallback) const
 {
     if (lang.empty()) lang = _lang;
 
@@ -643,7 +643,7 @@ void Zelph::unset_name(Node node, std::string lang)
     _pImpl->remove_name_locked(node, lang);
 }
 
-Node Zelph::get_node(const std::string& name, std::string lang) const
+Node Zelph::get_node_resident(const std::string& name, std::string lang) const
 {
     if (lang.empty()) lang = _lang;
 

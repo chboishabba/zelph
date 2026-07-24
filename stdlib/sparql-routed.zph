@@ -1,0 +1,34 @@
+# Routed partial-query execution strategy for sparql.zph.
+#
+# Loaded as a trusted companion only when SPARQL is imported while a manifest-
+# backed partial graph is active. The grammar and semantics remain defined by
+# sparql.zph; this module changes only the BGP physical strategy.
+%
+
+(def resident-eval-bgp-block eval-bgp-block)
+
+(set eval-bgp-block
+  (fn [triples solutions]
+    # Evaluate triples in source order. Every single-pattern call uses the
+    # existing direct targets/sources fast path when one end is bound. New
+    # bindings therefore become anchors for the following triple and can cause
+    # its hosted shard obligations to be routed before evaluation continues.
+    (var sols solutions)
+    (each triple triples
+      (unless (empty? sols)
+        # The current hosted contract has an exhaustive node router, not a
+        # predicate/global index. A predicate variable is safe only after an
+        # earlier triple has bound it in every incoming solution.
+        (def pred (triple 1))
+        (when (= (tag pred) :var)
+          (def pred-name (pred 1))
+          (var unbound false)
+          (each sol sols
+            (when (nil? (get sol pred-name)) (set unbound true)))
+          (when unbound
+            (error "Routed SPARQL requires a bound predicate; an exhaustive predicate/global index is not loaded")))
+        (set sols (resident-eval-bgp-block @[triple] sols))))
+    sols))
+
+"Routed SPARQL join strategy loaded."
+%
