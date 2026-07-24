@@ -1,14 +1,19 @@
-name: Partial SPARQL CI
+name: HF Partial Query CI
 
 on:
   push:
     branches:
-      - agent/partial-sparql-completeness
+      - agent/hf-partial-routed
+      - codex/hf-cache
   pull_request:
+    branches:
+      - codex/hf-cache
     paths:
+      - 'CMakeLists.txt'
       - 'src/lib/**'
       - 'src/test/**'
       - 'stdlib/**'
+      - 'tools/**'
       - 'docs/partial-sparql.md'
       - 'docs/schema/partial-query-manifest-v1.schema.json'
       - '.github/workflows/partial-sparql-ci.yml'
@@ -17,15 +22,50 @@ permissions:
   contents: read
 
 jobs:
-  build-and-test:
+  clean-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Debug, Release]
+        compiler: [gcc, clang]
     runs-on: ubuntu-latest
+    env:
+      CC: ${{ matrix.compiler == 'clang' && 'clang' || 'gcc' }}
+      CXX: ${{ matrix.compiler == 'clang' && 'clang++' || 'g++' }}
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y capnproto libcapnp-dev meson ninja-build
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DZELPH_BUILD_APP=OFF -DZELPH_BUILD_TESTS=ON
+        run: >-
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DZELPH_BUILD_APP=ON
+          -DZELPH_BUILD_TESTS=ON
+          -DZELPH_USE_MIMALLOC=OFF
       - name: Build
         run: cmake --build build --parallel 2
       - name: Test
         run: ctest --test-dir build --output-on-failure
+      - name: Verify packaged standard library
+        run: |
+          test -f build/bin/stdlib/sparql.zph
+          test -f build/bin/stdlib/sparql.zph.capability
+      - name: Verify executable
+        run: build/bin/zelph --version
+
+  schema-and-tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate JSON schema
+        run: python -m json.tool docs/schema/partial-query-manifest-v1.schema.json >/dev/null
+      - name: Compile artifact tools
+        run: python -m py_compile tools/emit_partial_query_manifest.py
