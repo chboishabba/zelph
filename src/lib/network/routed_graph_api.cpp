@@ -8,6 +8,7 @@ loads.
 
 #include "zelph.hpp"
 
+#include <utility>
 #include <vector>
 
 namespace zelph::network
@@ -15,6 +16,12 @@ namespace zelph::network
     uintptr_t Zelph::partial_query_instance_token() const
     {
         return reinterpret_cast<uintptr_t>(_pImpl);
+    }
+
+    bool Zelph::partial_query_certifiable() const
+    {
+        const auto status = partial_query_status_json();
+        return status.find("\"manifest_exhaustive\":true") != std::string::npos;
     }
 
     Node Zelph::node(const std::string& name, std::string lang)
