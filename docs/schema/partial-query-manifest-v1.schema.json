@@ -47,10 +47,11 @@
     "source": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["binPath", "headerLengthBytes"],
+      "required": ["binPath", "headerLengthBytes", "digest"],
       "properties": {
         "binPath": { "type": "string", "minLength": 1 },
-        "headerLengthBytes": { "type": "integer", "minimum": 1 }
+        "headerLengthBytes": { "type": "integer", "minimum": 1 },
+        "digest": { "$ref": "#/$defs/digest" }
       }
     },
     "sections": {
