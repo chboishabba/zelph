@@ -135,6 +135,7 @@ def main() -> int:
     header_relative = "header.capnp"
     header_path = output / header_relative
     copy_range(source_bin, header_path, 0, header_length)
+    header_digest = sha256_file(header_path)
 
     canonical_sections: dict[str, Any] = {}
     flat_shards: list[dict[str, Any]] = []
@@ -216,6 +217,7 @@ def main() -> int:
     document["source"] = {
         "binPath": transport_uri(header_relative, args.base_uri),
         "headerLengthBytes": header_path.stat().st_size,
+        "digest": {"algorithm": "sha256", "value": header_digest},
     }
     document["sections"] = canonical_sections
     document["capabilities"] = {"nodeRouteIndex": True, "features": ["node-route"]}
