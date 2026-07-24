@@ -15,6 +15,7 @@ Copyright (c) 2026 acrion innovations GmbH
 #include <map>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <system_error>
 #include <vector>
 
@@ -31,10 +32,21 @@ namespace zelph::network
                 std::chrono::steady_clock::now() - start).count());
         }
 
-        bool is_remote(const std::string& uri)
+        bool env_true(const char* name)
         {
-            return detail::is_hf_uri(uri);
+            const char* value = std::getenv(name);
+            return value && (*value == '1' || std::string_view(value) == "true" || std::string_view(value) == "TRUE");
         }
+
+        uint64_t env_u64(const char* name, uint64_t fallback)
+        {
+            const char* value = std::getenv(name);
+            if (!value || !*value) return fallback;
+            try { return std::stoull(value); }
+            catch (...) { return fallback; }
+        }
+
+        bool is_remote(const std::string& uri) { return detail::is_hf_uri(uri); }
 
         std::filesystem::path local_path_for(const std::string& uri)
         {
@@ -95,7 +107,7 @@ namespace zelph::network
             return digest;
         }
 
-        void copy_atomically(const std::filesystem::path& from, const std::filesystem::path& to)
+        void publish_atomically(const std::filesystem::path& from, const std::filesystem::path& to)
         {
             const auto temporary = std::filesystem::path(to.string() + ".tmp");
             std::error_code ignored;
@@ -109,6 +121,65 @@ namespace zelph::network
                 std::filesystem::rename(temporary, to, ignored);
                 if (ignored) throw std::runtime_error("Cannot publish verified cache object " + to.string());
             }
+        }
+
+        void extract_range(const std::filesystem::path& source,
+                           const std::filesystem::path& destination,
+                           const uint64_t offset,
+                           const uint64_t length)
+        {
+            std::ifstream input(source, std::ios::binary);
+            if (!input) throw std::runtime_error("Cannot open partial-query source: " + source.string());
+            input.seekg(static_cast<std::streamoff>(offset));
+            if (!input) throw std::runtime_error("Cannot seek partial-query source: " + source.string());
+
+            const auto temporary = std::filesystem::path(destination.string() + ".tmp");
+            std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+            if (!output) throw std::runtime_error("Cannot create partial-query range: " + temporary.string());
+            std::array<char, 1 << 16> buffer{};
+            uint64_t remaining = length;
+            while (remaining > 0)
+            {
+                const auto take = static_cast<std::streamsize>(std::min<uint64_t>(remaining, buffer.size()));
+                input.read(buffer.data(), take);
+                if (input.gcount() != take)
+                    throw std::runtime_error("Local partial-query range is truncated: " + source.string());
+                output.write(buffer.data(), take);
+                remaining -= static_cast<uint64_t>(take);
+            }
+            output.close();
+            std::error_code ignored;
+            std::filesystem::rename(temporary, destination, ignored);
+            if (ignored)
+            {
+                std::filesystem::remove(destination, ignored);
+                ignored.clear();
+                std::filesystem::rename(temporary, destination, ignored);
+                if (ignored) throw std::runtime_error("Cannot publish local partial-query range");
+            }
+        }
+
+        bool negative_cache_active(const std::filesystem::path& path, std::string& reason)
+        {
+            if (!std::filesystem::is_regular_file(path)) return false;
+            const uint64_t ttl = env_u64("ZELPH_HF_NEGATIVE_CACHE_SECONDS", 30);
+            if (!ttl) return false;
+            std::error_code error;
+            const auto age = std::filesystem::file_time_type::clock::now() - std::filesystem::last_write_time(path, error);
+            if (error || age > std::chrono::seconds(ttl))
+            {
+                std::filesystem::remove(path, error);
+                return false;
+            }
+            std::ifstream input(path);
+            std::getline(input, reason);
+            return true;
+        }
+
+        void write_negative_cache(const std::filesystem::path& path, const std::string& reason)
+        {
+            std::ofstream output(path, std::ios::trunc);
+            if (output) output << reason << '\n';
         }
     }
 
@@ -131,22 +202,13 @@ namespace zelph::network
         const auto guard = flight_mutex(identity);
         std::lock_guard flight_lock(*guard);
 
-        VerifiedObject result;
-        if (!is_remote(request.uri))
-        {
-            result.local_path = std::filesystem::absolute(local_path_for(request.uri));
-            if (!std::filesystem::is_regular_file(result.local_path))
-                throw std::runtime_error("Partial-query local object not found: " + result.local_path.string());
-            const auto verify_started = std::chrono::steady_clock::now();
-            result.sha256 = verify(result.local_path, request);
-            result.verify_milliseconds = millis_since(verify_started);
-            result.byte_size = file_size(result.local_path);
-            result.cache_disposition = CacheDisposition::local;
-            result.materialize_milliseconds = millis_since(started);
-            return result;
-        }
-
         const auto cache_path = verified_root() / (sha256::bytes(identity) + ".body");
+        const auto negative_path = verified_root() / (sha256::bytes(identity) + ".negative");
+        std::string negative_reason;
+        if (negative_cache_active(negative_path, negative_reason))
+            throw std::runtime_error("Recently failed partial-query object: " + negative_reason);
+
+        VerifiedObject result;
         if (std::filesystem::is_regular_file(cache_path))
         {
             try
@@ -169,30 +231,62 @@ namespace zelph::network
             }
         }
 
-        const auto fetched = detail::fetch_chunk_to_cache(
-            request.uri, request.offset, request.length,
-            request.section_hint.empty() ? "partial-query" : request.section_hint);
-        const auto verify_started = std::chrono::steady_clock::now();
-        result.sha256 = verify(fetched, request);
-        result.verify_milliseconds = millis_since(verify_started);
-        copy_atomically(fetched, cache_path);
-        result.local_path = cache_path;
-        result.byte_size = file_size(cache_path);
-        result.cache_disposition = CacheDisposition::fetched;
-        result.materialize_milliseconds = millis_since(started);
-        enforce_quota();
-        return result;
+        if (env_true("ZELPH_HF_OFFLINE"))
+            throw std::runtime_error("Offline mode has no verified cache object for " + request.uri);
+
+        try
+        {
+            std::filesystem::path materialized;
+            CacheDisposition disposition = CacheDisposition::fetched;
+            if (!is_remote(request.uri))
+            {
+                const auto source = std::filesystem::absolute(local_path_for(request.uri));
+                if (!std::filesystem::is_regular_file(source))
+                    throw std::runtime_error("Partial-query local object not found: " + source.string());
+                if (request.offset || request.length)
+                {
+                    if (!request.length) throw std::runtime_error("A local range requires an explicit length");
+                    extract_range(source, cache_path, request.offset, request.length);
+                    materialized = cache_path;
+                    disposition = CacheDisposition::local;
+                }
+                else
+                {
+                    materialized = source;
+                    disposition = CacheDisposition::local;
+                }
+            }
+            else
+            {
+                materialized = detail::fetch_chunk_to_cache(
+                    request.uri, request.offset, request.length,
+                    request.section_hint.empty() ? "partial-query" : request.section_hint);
+            }
+
+            const auto verify_started = std::chrono::steady_clock::now();
+            result.sha256 = verify(materialized, request);
+            result.verify_milliseconds = millis_since(verify_started);
+            if (materialized != cache_path) publish_atomically(materialized, cache_path);
+            result.local_path = cache_path;
+            result.byte_size = file_size(cache_path);
+            result.cache_disposition = disposition;
+            result.materialize_milliseconds = millis_since(started);
+            std::error_code ignored;
+            std::filesystem::remove(negative_path, ignored);
+            enforce_quota();
+            return result;
+        }
+        catch (const std::exception& error)
+        {
+            write_negative_cache(negative_path, error.what());
+            throw;
+        }
     }
 
     void VerifiedObjectStore::enforce_quota() const
     {
-        const char* configured = std::getenv("ZELPH_HF_CACHE_MAX_BYTES");
-        if (!configured || !*configured) return;
-        uint64_t limit = 0;
-        try { limit = std::stoull(configured); }
-        catch (...) { return; }
+        const uint64_t limit = env_u64("ZELPH_HF_CACHE_MAX_BYTES", 0);
         if (!limit) return;
-
         struct Entry { std::filesystem::path path; uint64_t size; std::filesystem::file_time_type time; };
         std::vector<Entry> entries;
         uint64_t total = 0;
