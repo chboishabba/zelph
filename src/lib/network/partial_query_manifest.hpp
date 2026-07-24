@@ -17,13 +17,7 @@ Validated hosted-artifact contract for routed partial queries.
 
 namespace zelph::network
 {
-    enum class PartialChunkSection
-    {
-        left,
-        right,
-        name_of_node,
-        node_of_name,
-    };
+    enum class PartialChunkSection { left, right, name_of_node, node_of_name };
 
     struct PartialChunkDescriptor
     {
@@ -53,11 +47,9 @@ namespace zelph::network
     public:
 #ifndef __EMSCRIPTEN__
         static PartialQueryManifest load(const std::string& source, const std::string& shard_root = {});
-
         const detail::ManifestDescription& legacy() const { return _legacy; }
         detail::ManifestDescription& legacy() { return _legacy; }
 #endif
-
         bool canonical() const { return _canonical; }
         bool certifiable() const;
         bool layer_available(const std::string& layer) const;
@@ -71,6 +63,7 @@ namespace zelph::network
 
         const PartialChunkDescriptor* chunk(PartialChunkSection section, uint32_t index) const;
         std::vector<PartialChunkDescriptor> chunks(PartialChunkSection section) const;
+        void add_chunk(PartialChunkDescriptor descriptor);
         std::string coverage_summary() const;
 
         static const char* section_name(PartialChunkSection section);
