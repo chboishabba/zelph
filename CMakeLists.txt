@@ -102,6 +102,7 @@ if(NOT EMSCRIPTEN)
     # these methods after satisfying manifest obligations.
     set_property(SOURCE network/zelph.cpp DIRECTORY src/lib APPEND PROPERTY COMPILE_DEFINITIONS
         node=node_resident
+        check_fact=check_fact_resident
         get_fact_objects=get_fact_objects_resident
         get_fact_subjects=get_fact_subjects_resident
         transitive_targets=transitive_targets_resident
