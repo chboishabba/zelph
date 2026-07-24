@@ -19,8 +19,8 @@
     # pattern remains rejected by the C++ semantic classifier.
     (var sols solutions)
     (each triple triples
-      (when (empty? sols) (break))
-      (set sols (resident-eval-bgp-block @[triple] sols)))
+      (unless (empty? sols)
+        (set sols (resident-eval-bgp-block @[triple] sols))))
     sols))
 
 "Routed SPARQL join strategy loaded."
