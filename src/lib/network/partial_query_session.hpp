@@ -29,7 +29,6 @@ namespace zelph::network
                             std::string source_bin_override,
                             bool initial_payload_loaded);
 
-        void load_initial_selection(const Zelph::BinChunkSelection& selection);
         bool ensure_name(const std::string& name, const std::string& language);
         void ensure_node_names(Node node);
         void ensure_outgoing(Node subject, Node predicate, uint64_t depth = 0);
@@ -57,7 +56,6 @@ namespace zelph::network
                              partial_query::RepresentationLayer layer,
                              uint64_t depth);
         void load_chunk(PartialChunkSection section, uint32_t index, const std::string& obligation_id);
-        void load_declared_chunk(PartialChunkSection section, uint32_t index, const std::string& prefix);
         ObjectRequest object_request(const PartialChunkDescriptor& descriptor) const;
         std::string resolve_uri(const std::string& uri) const;
         bool loaded(PartialChunkSection section, uint32_t index) const;
