@@ -102,7 +102,8 @@ namespace zelph::network
                 descriptor.source_offset = ref.source_offset;
                 descriptor.has_source_offset = ref.has_source_offset;
                 descriptor.uri = ref.object_path;
-                descriptor.layer = "directClaim";
+                descriptor.layer = section == PartialChunkSection::name_of_node || section == PartialChunkSection::node_of_name
+                                 ? "names" : "directClaim";
                 manifest.add_chunk(std::move(descriptor));
             }
         }
@@ -166,6 +167,14 @@ namespace zelph::network
             if (!result._manifest_hash_valid)
                 throw std::runtime_error("Canonical partial-query manifest contract hash is invalid");
 
+            const auto source_object = detail::find_json_object(text, "source");
+            if (source_object.empty()) throw std::runtime_error("Canonical partial-query manifest is missing source metadata");
+            detail::parse_json_string_field(source_object, "binPath", result._source_uri);
+            result._source_sha256 = digest_value(source_object);
+            if (!detail::parse_json_number_field(source_object, "headerLengthBytes", result._source_byte_size)
+                || result._source_uri.empty() || result._source_sha256.empty() || !result._source_byte_size)
+                throw std::runtime_error("Canonical source requires binPath, headerLengthBytes, and SHA-256 digest");
+
             const auto partitioning = detail::find_json_object(text, "partitioning");
             if (!partitioning.empty()) detail::parse_json_bool_field(partitioning, "globalCoverage", result._global_coverage);
 
@@ -226,6 +235,7 @@ namespace zelph::network
         {
             result._dataset_id = "legacy";
             result._dataset_version = result._manifest_sha256;
+            result._source_uri = result._legacy.source_bin_path;
             result._layers.insert("directClaim");
             result._layers.insert("names");
             result._node_routing_index.id = "legacy-node-route";
@@ -245,7 +255,8 @@ namespace zelph::network
 
     bool PartialQueryManifest::certifiable() const
     {
-        if (!_canonical || !_manifest_hash_valid || !_node_routing_index.exhaustive || _chunks.empty()) return false;
+        if (!_canonical || !_manifest_hash_valid || !_node_routing_index.exhaustive || _chunks.empty()
+            || _source_uri.empty() || _source_sha256.empty() || !_source_byte_size) return false;
         for (const auto& [_, chunk] : _chunks)
             if (chunk.sha256.empty() || chunk.uri.empty()) return false;
         return true;
