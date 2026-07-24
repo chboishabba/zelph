@@ -5,14 +5,15 @@ Partial-graph SPARQL semantic classification and graph-preservation support.
 */
 #pragma once
 
+#include "network/partial_query_runtime.hpp"
 #include "network/reasoning.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <cstring>
-#include <optional>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -28,56 +29,46 @@ namespace zelph::console::partial_sparql
         aggregate,
         ordered_window,
         global_scan,
-        representation_unknown,
     };
 
     enum class ResultContract
     {
         sound_lower_bound,
-        potentially_unstable,
+        provisional_retractable,
+        withheld_until_complete,
         complete_under_coverage_certificate,
     };
 
-    enum class CoverageState
-    {
-        complete,
-        incomplete,
-        unknown,
-    };
+    enum class CoverageState { complete, incomplete, unknown };
 
     struct QueryAssessment
     {
-        QueryClass      query_class     = QueryClass::positive_monotone;
-        ResultContract  result_contract = ResultContract::sound_lower_bound;
-        CoverageState   coverage        = CoverageState::unknown;
-        bool            allowed_in_resident_slice = true;
-        bool            recursive_path           = false;
-        bool            requires_qualifier_layer = false;
-        bool            has_non_monotone_operator = false;
-        bool            has_aggregate             = false;
-        bool            has_order_or_limit        = false;
-        bool            has_global_scan           = false;
-        std::string     reason;
+        QueryClass query_class = QueryClass::positive_monotone;
+        ResultContract result_contract = ResultContract::sound_lower_bound;
+        CoverageState coverage = CoverageState::unknown;
+        bool allowed_in_resident_slice = true;
+        bool allowed_with_routed_coverage = true;
+        bool requires_complete_coverage = false;
+        bool recursive_path = false;
+        bool requires_qualifier_layer = false;
+        bool has_non_monotone_operator = false;
+        bool has_aggregate = false;
+        bool has_order_or_limit = false;
+        bool has_global_scan = false;
+        std::vector<std::string> required_layers;
+        std::string reason;
     };
 
     inline const char* query_class_name(const QueryClass value)
     {
         switch (value)
         {
-        case QueryClass::positive_monotone:
-            return "positive-monotone";
-        case QueryClass::recursive_path:
-            return "recursive-path";
-        case QueryClass::non_monotone:
-            return "non-monotone";
-        case QueryClass::aggregate:
-            return "aggregate";
-        case QueryClass::ordered_window:
-            return "ordered-window";
-        case QueryClass::global_scan:
-            return "global-scan";
-        case QueryClass::representation_unknown:
-            return "representation-coverage-unknown";
+        case QueryClass::positive_monotone: return "positive-monotone";
+        case QueryClass::recursive_path: return "recursive-path";
+        case QueryClass::non_monotone: return "non-monotone";
+        case QueryClass::aggregate: return "aggregate";
+        case QueryClass::ordered_window: return "ordered-window";
+        case QueryClass::global_scan: return "global-scan";
         }
         return "unknown";
     }
@@ -86,14 +77,24 @@ namespace zelph::console::partial_sparql
     {
         switch (value)
         {
-        case ResultContract::sound_lower_bound:
-            return "sound-lower-bound";
-        case ResultContract::potentially_unstable:
-            return "potentially-unstable";
-        case ResultContract::complete_under_coverage_certificate:
-            return "complete-under-coverage-certificate";
+        case ResultContract::sound_lower_bound: return "sound-lower-bound";
+        case ResultContract::provisional_retractable: return "provisional-retractable";
+        case ResultContract::withheld_until_complete: return "withheld-until-complete";
+        case ResultContract::complete_under_coverage_certificate: return "complete-under-coverage-certificate";
         }
         return "unknown";
+    }
+
+    inline network::partial_query::RowContract runtime_contract(const ResultContract value)
+    {
+        switch (value)
+        {
+        case ResultContract::sound_lower_bound: return network::partial_query::RowContract::sound_lower_bound;
+        case ResultContract::provisional_retractable: return network::partial_query::RowContract::provisional_retractable;
+        case ResultContract::withheld_until_complete: return network::partial_query::RowContract::withheld_until_complete;
+        case ResultContract::complete_under_coverage_certificate: return network::partial_query::RowContract::exact;
+        }
+        return network::partial_query::RowContract::sound_lower_bound;
     }
 
     inline std::string lexical_upper(const std::string& query)
@@ -102,24 +103,16 @@ namespace zelph::console::partial_sparql
         out.reserve(query.size());
         bool in_single = false;
         bool in_double = false;
-        bool in_iri    = false;
+        bool in_iri = false;
         bool in_comment = false;
         bool escaped = false;
-
         for (const unsigned char raw : query)
         {
             const char c = static_cast<char>(raw);
             if (in_comment)
             {
-                if (c == '\n')
-                {
-                    in_comment = false;
-                    out.push_back('\n');
-                }
-                else
-                {
-                    out.push_back(' ');
-                }
+                if (c == '\n') { in_comment = false; out.push_back('\n'); }
+                else out.push_back(' ');
                 continue;
             }
             if (!in_single && !in_double && !in_iri && c == '#')
@@ -128,47 +121,13 @@ namespace zelph::console::partial_sparql
                 out.push_back(' ');
                 continue;
             }
-            if (escaped)
-            {
-                escaped = false;
-                out.push_back(' ');
-                continue;
-            }
-            if ((in_single || in_double) && c == '\\')
-            {
-                escaped = true;
-                out.push_back(' ');
-                continue;
-            }
-            if (!in_double && !in_iri && c == '\'')
-            {
-                in_single = !in_single;
-                out.push_back(' ');
-                continue;
-            }
-            if (!in_single && !in_iri && c == '"')
-            {
-                in_double = !in_double;
-                out.push_back(' ');
-                continue;
-            }
-            if (!in_single && !in_double && c == '<')
-            {
-                in_iri = true;
-                out.push_back(' ');
-                continue;
-            }
-            if (in_iri && c == '>')
-            {
-                in_iri = false;
-                out.push_back(' ');
-                continue;
-            }
-            if (in_single || in_double || in_iri)
-            {
-                out.push_back(' ');
-                continue;
-            }
+            if (escaped) { escaped = false; out.push_back(' '); continue; }
+            if ((in_single || in_double) && c == '\\') { escaped = true; out.push_back(' '); continue; }
+            if (!in_double && !in_iri && c == '\'') { in_single = !in_single; out.push_back(' '); continue; }
+            if (!in_single && !in_iri && c == '"') { in_double = !in_double; out.push_back(' '); continue; }
+            if (!in_single && !in_double && c == '<') { in_iri = true; out.push_back(' '); continue; }
+            if (in_iri && c == '>') { in_iri = false; out.push_back(' '); continue; }
+            if (in_single || in_double || in_iri) { out.push_back(' '); continue; }
             out.push_back(static_cast<char>(std::toupper(raw)));
         }
         return out;
@@ -188,10 +147,26 @@ namespace zelph::console::partial_sparql
         return false;
     }
 
+    inline void add_layer(std::set<std::string>& layers, const std::string& value)
+    {
+        layers.insert(value);
+    }
+
     inline QueryAssessment classify(const std::string& query)
     {
         const std::string upper = lexical_upper(query);
         QueryAssessment assessment;
+        std::set<std::string> layers{"names"};
+
+        if (upper.find("WDT:") != std::string::npos) add_layer(layers, "directClaim");
+        if (std::regex_search(upper, std::regex(R"((^|[^A-Z0-9_-])P:)"))) add_layer(layers, "statement");
+        if (upper.find("PS:") != std::string::npos) add_layer(layers, "mainSnak");
+        if (upper.find("PQ:") != std::string::npos) add_layer(layers, "qualifier");
+        if (upper.find("PR:") != std::string::npos) add_layer(layers, "reference");
+        if (upper.find("WIKIBASE:RANK") != std::string::npos) add_layer(layers, "rank");
+        if (layers.size() == 1) add_layer(layers, "directClaim");
+        assessment.required_layers.assign(layers.begin(), layers.end());
+        assessment.requires_qualifier_layer = layers.contains("qualifier");
 
         assessment.has_non_monotone_operator = contains_word(upper, "MINUS")
                                              || contains_word(upper, "OPTIONAL")
@@ -201,94 +176,80 @@ namespace zelph::console::partial_sparql
         assessment.has_order_or_limit = upper.find("ORDER BY") != std::string::npos
                                      || contains_word(upper, "LIMIT")
                                      || contains_word(upper, "OFFSET");
-        assessment.recursive_path = std::regex_search(upper, std::regex(R"(((?:[A-Z][A-Z0-9_-]*:)?[A-Z][A-Z0-9_-]*[+*])(?=\s|/|\?|\.|\}))"));
-        assessment.requires_qualifier_layer = std::regex_search(upper, std::regex(R"((^|[^A-Z0-9_-])(P|PS|PQ|PR):)"))
-                                           || upper.find("WIKIBASE:RANK") != std::string::npos;
+        assessment.recursive_path = std::regex_search(
+            upper, std::regex(R"(((?:[A-Z][A-Z0-9_-]*:)?[A-Z][A-Z0-9_-]*[+*])(?=\s|/|\?|\.|\}))"));
 
-        // The first graph pattern must be anchorable by a concrete subject or
-        // object. Later patterns may have two syntactic variables because an
-        // earlier pattern can bind one of them before the join is evaluated.
         const std::regex unanchored_initial(
             R"(\{\s*(\?[A-Z_][A-Z0-9_-]*)\s+([^\s{}]+)\s+(\?[A-Z_][A-Z0-9_-]*))");
         assessment.has_global_scan = std::regex_search(upper, unanchored_initial);
 
-        if (assessment.requires_qualifier_layer)
+        if (assessment.has_global_scan)
         {
-            assessment.query_class = QueryClass::representation_unknown;
-            assessment.result_contract = ResultContract::potentially_unstable;
+            assessment.query_class = QueryClass::global_scan;
+            assessment.result_contract = ResultContract::withheld_until_complete;
             assessment.allowed_in_resident_slice = false;
-            assessment.reason = "The loaded manifest does not yet certify p:/ps:/pq:/pr:/rank representation coverage.";
+            assessment.allowed_with_routed_coverage = false;
+            assessment.requires_complete_coverage = true;
+            assessment.reason = "The first pattern is unanchored and requires an exhaustive predicate/global index.";
         }
         else if (assessment.has_non_monotone_operator)
         {
             assessment.query_class = QueryClass::non_monotone;
-            assessment.result_contract = ResultContract::potentially_unstable;
+            assessment.result_contract = ResultContract::withheld_until_complete;
             assessment.allowed_in_resident_slice = false;
-            assessment.reason = "OPTIONAL, MINUS, and absence-sensitive operators require complete routed coverage before finalisation.";
+            assessment.requires_complete_coverage = true;
+            assessment.reason = "Absence-sensitive results are withheld until routed coverage reaches a fixed point.";
         }
         else if (assessment.has_aggregate)
         {
             assessment.query_class = QueryClass::aggregate;
-            assessment.result_contract = ResultContract::potentially_unstable;
+            assessment.result_contract = ResultContract::withheld_until_complete;
             assessment.allowed_in_resident_slice = false;
-            assessment.reason = "Aggregates are not exact until every relevant routing obligation is discharged.";
+            assessment.requires_complete_coverage = true;
+            assessment.reason = "Exact aggregates are final only after all relevant routing obligations are discharged.";
         }
         else if (assessment.has_order_or_limit)
         {
             assessment.query_class = QueryClass::ordered_window;
-            assessment.result_contract = ResultContract::potentially_unstable;
+            assessment.result_contract = ResultContract::withheld_until_complete;
             assessment.allowed_in_resident_slice = false;
-            assessment.reason = "ORDER BY/LIMIT/OFFSET results are unstable while unseen shards may contain superior rows.";
-        }
-        else if (assessment.has_global_scan)
-        {
-            assessment.query_class = QueryClass::global_scan;
-            assessment.result_contract = ResultContract::sound_lower_bound;
-            assessment.allowed_in_resident_slice = false;
-            assessment.reason = "The query has an unanchored triple pattern; completeness requires an exhaustive predicate/global index.";
+            assessment.requires_complete_coverage = true;
+            assessment.reason = "The ordered window is withheld until unseen superior rows are ruled out.";
         }
         else if (assessment.recursive_path)
         {
             assessment.query_class = QueryClass::recursive_path;
             assessment.result_contract = ResultContract::sound_lower_bound;
-            assessment.reason = "Returned path rows are valid over the resident graph, but routed closure has not yet been certified.";
+            assessment.reason = "Path rows stream monotonically; finality requires routed frontier exhaustion.";
         }
         else
         {
             assessment.query_class = QueryClass::positive_monotone;
             assessment.result_contract = ResultContract::sound_lower_bound;
-            assessment.reason = "Returned rows remain valid under graph extension; additional rows may exist.";
+            assessment.reason = "Rows remain valid under graph extension and become exact at the routed fixed point.";
         }
         return assessment;
     }
 
     struct GraphFingerprint
     {
-        uint64_t hash       = 1469598103934665603ULL;
-        uint64_t nodes      = 0;
+        uint64_t hash = 1469598103934665603ULL;
+        uint64_t nodes = 0;
         uint64_t left_edges = 0;
         uint64_t right_edges = 0;
-        uint64_t names      = 0;
-        uint64_t rules      = 0;
-
+        uint64_t names = 0;
+        uint64_t rules = 0;
         friend bool operator==(const GraphFingerprint&, const GraphFingerprint&) = default;
     };
 
     inline void hash_bytes(uint64_t& hash, const void* data, const size_t size)
     {
         const auto* bytes = static_cast<const unsigned char*>(data);
-        for (size_t i = 0; i < size; ++i)
-        {
-            hash ^= bytes[i];
-            hash *= 1099511628211ULL;
-        }
+        for (size_t i = 0; i < size; ++i) { hash ^= bytes[i]; hash *= 1099511628211ULL; }
     }
 
     template <typename T>
-    inline void hash_value(uint64_t& hash, const T& value)
-    {
-        hash_bytes(hash, &value, sizeof(value));
-    }
+    inline void hash_value(uint64_t& hash, const T& value) { hash_bytes(hash, &value, sizeof(value)); }
 
     inline void hash_string(uint64_t& hash, const std::string& value)
     {
@@ -302,11 +263,9 @@ namespace zelph::console::partial_sparql
         GraphFingerprint result;
         std::vector<network::Node> nodes;
         const auto view = graph.get_all_nodes_view();
-        for (auto it = view.begin(); it != view.end(); ++it)
-            nodes.push_back(it->first);
+        for (auto it = view.begin(); it != view.end(); ++it) nodes.push_back(it->first);
         std::sort(nodes.begin(), nodes.end());
         result.nodes = nodes.size();
-
         for (const auto node : nodes)
         {
             hash_value(result.hash, node);
@@ -323,7 +282,6 @@ namespace zelph::console::partial_sparql
                 std::memcpy(&bits, &weight, sizeof(bits));
                 hash_value(result.hash, bits);
             }
-
             auto right = graph.get_right(node);
             std::vector<network::Node> right_sorted(right.begin(), right.end());
             std::sort(right_sorted.begin(), right_sorted.end());
@@ -337,7 +295,6 @@ namespace zelph::console::partial_sparql
                 hash_value(result.hash, bits);
             }
         }
-
         auto languages = graph.get_languages();
         std::sort(languages.begin(), languages.end());
         for (const auto& language : languages)
@@ -345,7 +302,7 @@ namespace zelph::console::partial_sparql
             hash_string(result.hash, language);
             for (const auto node : nodes)
             {
-                const auto name = graph.get_name(node, language, false);
+                const auto name = graph.get_name_resident(node, language, false);
                 if (!name.empty())
                 {
                     ++result.names;
@@ -362,12 +319,9 @@ namespace zelph::console::partial_sparql
     inline std::string describe(const GraphFingerprint& value)
     {
         std::ostringstream stream;
-        stream << "hash=" << value.hash
-               << ", nodes=" << value.nodes
-               << ", left_edges=" << value.left_edges
-               << ", right_edges=" << value.right_edges
-               << ", names=" << value.names
-               << ", rules=" << value.rules;
+        stream << "hash=" << value.hash << ", nodes=" << value.nodes
+               << ", left_edges=" << value.left_edges << ", right_edges=" << value.right_edges
+               << ", names=" << value.names << ", rules=" << value.rules;
         return stream.str();
     }
 } // namespace zelph::console::partial_sparql
