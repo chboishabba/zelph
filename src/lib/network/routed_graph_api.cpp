@@ -60,6 +60,12 @@ namespace zelph::network
         return value;
     }
 
+    Answer Zelph::check_fact(const Node subject, const Node predicate, const adjacency_set& objects) const
+    {
+        if (partial_query_active()) ensure_partial_outgoing(subject, predicate, 0);
+        return check_fact_resident(subject, predicate, objects);
+    }
+
     adjacency_set Zelph::get_fact_objects(const Node subject, const Node predicate) const
     {
         if (partial_query_active()) ensure_partial_outgoing(subject, predicate, 0);
