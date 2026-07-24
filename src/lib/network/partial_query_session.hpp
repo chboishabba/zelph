@@ -25,7 +25,8 @@ namespace zelph::network
                             std::string manifest_source,
                             const Zelph::BinChunkSelection& initial_selection,
                             std::string shard_root,
-                            std::string source_bin_override);
+                            std::string source_bin_override,
+                            bool initial_payload_loaded);
 
         bool ensure_name(const std::string& name, const std::string& language);
         void ensure_node_names(Node node);
@@ -44,7 +45,7 @@ namespace zelph::network
     private:
         using ChunkSet = std::set<uint32_t>;
 
-        void mark_initially_loaded(const Zelph::BinChunkSelection& selection);
+        void mark_initially_loaded(const Zelph::BinChunkSelection& selection, bool payload_loaded);
         detail::RouteSelectionResolution route_nodes(const std::vector<uint64_t>& nodes);
         detail::RouteSelectionResolution route_name(const std::string& name, const std::string& language);
         void load_resolution(const detail::RouteSelectionResolution& resolution,
