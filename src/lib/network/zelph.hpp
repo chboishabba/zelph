@@ -208,6 +208,7 @@ namespace zelph::network
                                              bool initial_payload_loaded) const;
         void clear_partial_query_session() const;
         bool partial_query_active() const;
+        bool partial_query_certifiable() const;
         bool ensure_partial_name(const std::string& name, const std::string& language) const;
         void ensure_partial_node_names(Node node) const;
         void ensure_partial_outgoing(Node subject, Node predicate, uint64_t depth = 0) const;
@@ -220,8 +221,6 @@ namespace zelph::network
         std::string partial_query_status_json() const;
         uintptr_t partial_query_instance_token() const;
 
-        // Internal resident implementations retained by source-specific CMake
-        // renaming. Routed wrappers call these after discharging obligations.
         Node          node_resident(const std::string& name, std::string lang = "");
         adjacency_set get_fact_objects_resident(Node subject, Node predicate) const;
         adjacency_set get_fact_subjects_resident(Node predicate, Node object) const;
