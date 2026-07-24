@@ -59,6 +59,9 @@ namespace zelph::network
         const std::string& dataset_id() const { return _dataset_id; }
         const std::string& dataset_version() const { return _dataset_version; }
         const std::string& manifest_sha256() const { return _manifest_sha256; }
+        const std::string& source_uri() const { return _source_uri; }
+        const std::string& source_sha256() const { return _source_sha256; }
+        uint64_t source_byte_size() const { return _source_byte_size; }
         const PartialRoutingIndexDescriptor& node_routing_index() const { return _node_routing_index; }
 
         const PartialChunkDescriptor* chunk(PartialChunkSection section, uint32_t index) const;
@@ -81,6 +84,9 @@ namespace zelph::network
         std::string _dataset_id;
         std::string _dataset_version;
         std::string _manifest_sha256;
+        std::string _source_uri;
+        std::string _source_sha256;
+        uint64_t _source_byte_size = 0;
         std::set<std::string> _layers;
         PartialRoutingIndexDescriptor _node_routing_index;
         std::map<std::pair<PartialChunkSection, uint32_t>, PartialChunkDescriptor> _chunks;
