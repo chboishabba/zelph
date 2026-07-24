@@ -222,6 +222,7 @@ namespace zelph::network
         uintptr_t partial_query_instance_token() const;
 
         Node          node_resident(const std::string& name, std::string lang = "");
+        Answer        check_fact_resident(Node subject, Node predicate, const adjacency_set& objects) const;
         adjacency_set get_fact_objects_resident(Node subject, Node predicate) const;
         adjacency_set get_fact_subjects_resident(Node predicate, Node object) const;
         adjacency_set transitive_targets_resident(Node start, Node predicate, bool include_start) const;
