@@ -135,6 +135,7 @@ void Zelph::load_from_manifest(const std::string& manifest_path,
 
     const auto contract = PartialQueryManifest::load(manifest_path, shard_root);
     std::string effective_bin_override = bin_path_override;
+    bool effective_skip_payload = skip_payload;
     if (contract.canonical())
     {
         VerifiedObjectStore objects;
@@ -146,10 +147,14 @@ void Zelph::load_from_manifest(const std::string& manifest_path,
         request.length = contract.source_byte_size();
         const auto verified = objects.materialize(request);
         effective_bin_override = verified.local_path.string();
+        effective_skip_payload = true;
         diagnostic("Verified canonical graph header: " + effective_bin_override, true);
+        if (!skip_payload)
+            diagnostic("Canonical payload selectors are deferred to verified query-driven loading.", true);
     }
 
-    _pImpl->loadFromManifest(manifest_path, selection, shard_root, effective_bin_override, skip_payload);
+    _pImpl->loadFromManifest(manifest_path, selection, shard_root,
+                             effective_bin_override, effective_skip_payload);
 
     if (!contract.legacy().node_route_supported)
     {
@@ -160,7 +165,8 @@ void Zelph::load_from_manifest(const std::string& manifest_path,
     try
     {
         configure_partial_query_session(manifest_path, selection, shard_root,
-                                        effective_bin_override, !skip_payload);
+                                        effective_bin_override,
+                                        !contract.canonical() && !effective_skip_payload);
     }
     catch (const std::exception& error)
     {
