@@ -3,10 +3,11 @@
   "$id": "https://zelph.org/schema/partial-query-manifest-v1.schema.json",
   "title": "Zelph partial-query manifest v1",
   "type": "object",
-  "additionalProperties": false,
-  "required": ["schemaVersion", "dataset", "partitioning", "representationLayers", "shards", "routingIndexes"],
+  "additionalProperties": true,
+  "required": ["schemaVersion", "dataset", "partitioning", "representationLayers", "source", "sections", "shards", "routingIndexes", "fallback"],
   "properties": {
     "schemaVersion": { "const": "zelph-partial-query-manifest-v1" },
+    "layout": { "const": "zelph-hf-layout/v3" },
     "dataset": {
       "type": "object",
       "additionalProperties": false,
@@ -21,25 +22,46 @@
     "partitioning": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["scheme", "disjoint", "overlapSemantics"],
+      "required": ["scheme", "disjoint", "overlapSemantics", "globalCoverage"],
       "properties": {
         "scheme": { "type": "string", "minLength": 1 },
         "disjoint": { "type": "boolean" },
         "overlapSemantics": { "enum": ["none", "duplicate-identical-triples", "declared-overlap"] },
-        "globalCoverage": { "type": "boolean", "default": false }
+        "globalCoverage": { "type": "boolean" }
       }
     },
     "representationLayers": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["directClaim", "statement", "mainSnak", "qualifier", "reference", "rank"],
+      "required": ["directClaim", "statement", "mainSnak", "qualifier", "reference", "rank", "names"],
       "properties": {
         "directClaim": { "type": "boolean" },
         "statement": { "type": "boolean" },
         "mainSnak": { "type": "boolean" },
         "qualifier": { "type": "boolean" },
         "reference": { "type": "boolean" },
-        "rank": { "type": "boolean" }
+        "rank": { "type": "boolean" },
+        "names": { "type": "boolean" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["binPath", "headerLengthBytes"],
+      "properties": {
+        "binPath": { "type": "string", "minLength": 1 },
+        "headerLengthBytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "sections": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["left", "right", "nameOfNode", "nodeOfName"],
+      "properties": {
+        "left": { "$ref": "#/$defs/legacySection" },
+        "right": { "$ref": "#/$defs/legacySection" },
+        "nameOfNode": { "$ref": "#/$defs/legacySection" },
+        "nodeOfName": { "$ref": "#/$defs/legacySection" }
       }
     },
     "shards": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/shard" } },
@@ -47,9 +69,10 @@
     "fallback": {
       "type": "object",
       "additionalProperties": false,
+      "required": ["allowedForCompleteness", "mode"],
       "properties": {
-        "allowedForCompleteness": { "type": "boolean", "default": false },
-        "mode": { "type": "string" }
+        "allowedForCompleteness": { "const": false },
+        "mode": { "const": "reject" }
       }
     }
   },
@@ -59,8 +82,8 @@
       "additionalProperties": false,
       "required": ["algorithm", "value"],
       "properties": {
-        "algorithm": { "enum": ["sha256", "blake3"] },
-        "value": { "type": "string", "pattern": "^[A-Fa-f0-9]+$" }
+        "algorithm": { "const": "sha256" },
+        "value": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" }
       }
     },
     "transport": {
@@ -84,18 +107,41 @@
         "inclusiveMaximum": { "type": "boolean", "default": true }
       }
     },
+    "legacyChunk": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["chunkIndex", "length", "objectPath"],
+      "properties": {
+        "chunkIndex": { "type": "integer", "minimum": 0 },
+        "length": { "type": "integer", "minimum": 1 },
+        "objectPath": { "type": "string", "minLength": 1 },
+        "which": { "type": "string" },
+        "lang": { "type": "string" }
+      }
+    },
+    "legacySection": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["chunks"],
+      "properties": {
+        "chunks": { "type": "array", "items": { "$ref": "#/$defs/legacyChunk" } }
+      }
+    },
     "shard": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "byteSize", "digest", "transports", "layers", "ranges"],
+      "required": ["id", "section", "chunkIndex", "byteSize", "digest", "transports", "layers", "ranges"],
       "properties": {
         "id": { "type": "string", "minLength": 1 },
-        "byteSize": { "type": "integer", "minimum": 0 },
+        "section": { "enum": ["left", "right", "nameOfNode", "nodeOfName"] },
+        "chunkIndex": { "type": "integer", "minimum": 0 },
+        "byteSize": { "type": "integer", "minimum": 1 },
         "formatVersion": { "type": "string" },
         "digest": { "$ref": "#/$defs/digest" },
         "transports": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/transport" } },
         "layers": {
           "type": "array",
+          "minItems": 1,
           "uniqueItems": true,
           "items": { "enum": ["directClaim", "statement", "mainSnak", "qualifier", "reference", "rank", "names"] }
         },
@@ -106,17 +152,18 @@
     "routingIndex": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "key", "exhaustive", "digest", "transports"],
+      "required": ["id", "key", "exhaustive", "digest", "transports", "formatVersion", "layers"],
       "properties": {
         "id": { "type": "string", "minLength": 1 },
-        "key": { "enum": ["subject", "subjectPredicate", "predicate", "objectPredicate", "name", "global"] },
+        "key": { "enum": ["node", "subject", "subjectPredicate", "predicate", "objectPredicate", "name", "global"] },
         "layers": {
           "type": "array",
+          "minItems": 1,
           "uniqueItems": true,
           "items": { "enum": ["directClaim", "statement", "mainSnak", "qualifier", "reference", "rank", "names"] }
         },
-        "exhaustive": { "type": "boolean" },
-        "formatVersion": { "type": "string" },
+        "exhaustive": { "const": true },
+        "formatVersion": { "type": "string", "minLength": 1 },
         "digest": { "$ref": "#/$defs/digest" },
         "transports": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/transport" } }
       }
