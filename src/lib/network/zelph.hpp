@@ -29,6 +29,7 @@ along with zelph. If not, see <https://www.gnu.org/licenses/>.
 #include "fact_structure_types.hpp"
 #include "io/output.hpp"
 #include "network.hpp"
+#include "partial_query_runtime.hpp"
 
 #include <zelph_export.h>
 
@@ -43,10 +44,8 @@ namespace zelph::network
     using name_of_node_map = ankerl::unordered_dense::map<Node, std::string_view>;
     using node_of_name_map = ankerl::unordered_dense::map<std::string_view, Node>;
 
-    // The core semantic network engine. It manages the in-memory graph structure (nodes, edges),
-    // provides low-level API for graph manipulation, and handles raw binary serialization (I/O)
-    // of the network state via load_from_file/save_to_file. It is agnostic to the semantic meaning
-    // or source format of the data.
+    enum class PartialChunkSection;
+
     class ZELPH_EXPORT Zelph
     {
     public:
@@ -86,7 +85,6 @@ namespace zelph::network
             explicit AllNodeView(const adjacency_map& left) : _left_ref(left) {}
             auto begin() const { return _left_ref.begin(); }
             auto end() const { return _left_ref.end(); }
-            // Usage: for (auto it = view.begin(); it != view.end(); ++it) { Node nd = it->first; }
         };
 
         class LangNodeView
@@ -98,10 +96,7 @@ namespace zelph::network
             explicit LangNodeView(const node_of_name_map& rev) : _rev_map(rev) {}
             auto begin() const { return _rev_map.begin(); }
             auto end() const { return _rev_map.end(); }
-            // Usage: for (auto it = view.begin(); it != view.end(); ++it) { Node nd = it->second; }
         };
-
-        // --- Implemented in zelph.cpp (core graph operations) ---
 
         static std::string   get_version();
         Node                 var() const;
@@ -162,33 +157,15 @@ namespace zelph::network
         double               edge_weight(Node from, Node to, double fallback = 1.0) const;
         void                 set_edge_weight(Node from, Node to, double weight) const;
 
-        // --- Number display (registered digit alphabet) ---
-        // A script may register the digit alphabet of its number
-        // representation, in ascending order of value. node_to_string then
-        // renders cons lists consisting solely of these digit nodes as
-        // decimal &-literals -- the exact inverse of the &-input syntax
-        // (zelph/number). An empty vector disables the feature. Any other
-        // list keeps the generic <...> display, so cons lists stay
-        // general-purpose. See stdlib/arithmetic.zph.
         void                                                      set_number_digits(const std::vector<Node>& digits_ascending);
         std::shared_ptr<const std::unordered_map<Node, uint32_t>> number_digit_values() const;
 
-        // --- Fact-creation observer (semi-naive evaluation) ---
-        // Invoked from fact() exactly when a NEW fact node is materialized
-        // (never for pre-existing facts). Reasoning::run uses it to capture
-        // the delta of facts created during a reasoning pass -- including
-        // inner facts materialized as side effects of instantiate_fact,
-        // which a deduce()-level hook would miss. Empty by default and
-        // outside of runs. Deliberately NOT invoked by
-        // fact_import_trusted_single_object (bulk import path).
         using FactCreationObserver = std::function<void(Node relation, Node predicate)>;
         void set_fact_creation_observer(FactCreationObserver observer);
 
-        // --- Implemented in zelph_names.cpp (name management) ---
-
         void                     set_name(Node node, const std::string& name, std::string lang, bool merge_on_conflict);
         Node                     set_name(const std::string& name_in_current_lang, const std::string& name_in_given_lang, std::string lang);
-        std::string              get_name(const Node node, std::string lang = "", const bool fallback = false) const;
+        std::string              get_name(Node node, std::string lang = "", bool fallback = false) const;
         std::string              get_formatted_name(Node node, const std::string& lang) const;
         bool                     has_name(Node node, const std::string& lang) const;
         void                     remove_name(Node node, std::string lang = "");
@@ -207,8 +184,6 @@ namespace zelph::network
         size_t                   get_node_of_name_size(const std::string& lang) const;
         size_t                   language_count() const;
 
-        // --- Implemented in zelph_maintenance.cpp (cleanup, rules, persistence) ---
-
         void          cleanup_isolated(size_t& removed_count) const;
         size_t        cleanup_names() const;
         void          remove_node(Node node) const;
@@ -218,11 +193,36 @@ namespace zelph::network
         void          save_to_file(const std::string& filename) const;
         void          load_from_file(const std::string& filename) const;
         void          load_from_file(const std::string& filename, const BinChunkSelection& selection, bool skip_payload = false) const;
-        void          load_from_manifest(const std::string&       manifest_path,
+        void          load_from_manifest(const std::string& manifest_path,
                                          const BinChunkSelection& selection,
-                                         const std::string&       shard_root        = "",
-                                         const std::string&       bin_path_override = "",
-                                         bool                     skip_payload      = false) const;
+                                         const std::string& shard_root = "",
+                                         const std::string& bin_path_override = "",
+                                         bool skip_payload = false) const;
+
+        // Query-driven partial loading. Chunks are appended without clearing
+        // resident state and never use sequential fallback.
+        void append_partial_chunk(PartialChunkSection section,
+                                  const std::string& verified_path,
+                                  uint64_t source_offset,
+                                  uint32_t chunk_index,
+                                  uint32_t section_count) const;
+        void configure_partial_query_session(const std::string& manifest_source,
+                                             const BinChunkSelection& initial_selection,
+                                             const std::string& shard_root,
+                                             const std::string& source_bin_override,
+                                             bool initial_payload_loaded) const;
+        void clear_partial_query_session() const;
+        bool partial_query_active() const;
+        bool ensure_partial_name(const std::string& name, const std::string& language) const;
+        void ensure_partial_node_names(Node node) const;
+        void ensure_partial_outgoing(Node subject, Node predicate, uint64_t depth = 0) const;
+        void ensure_partial_incoming(Node predicate, Node object, uint64_t depth = 0) const;
+        bool partial_query_supports_layers(const std::vector<std::string>& layers) const;
+        void begin_partial_query(const std::string& query,
+                                 const std::vector<std::string>& layers,
+                                 partial_query::RowContract contract) const;
+        std::string finish_partial_query(bool evaluation_fixed_point, uint64_t result_rows = 0) const;
+        std::string partial_query_status_json() const;
 
         void                                        set_active_cluster(const std::string& name) const;
         void                                        deactivate_cluster() const;
@@ -231,10 +231,8 @@ namespace zelph::network
         size_t                                      drop_cluster(const std::string& name) const;
         bool                                        merge_cluster(const std::string& from, const std::string& to) const;
 
-        // --- Members ---
-
         class Impl;
-        Impl* const _pImpl; // must stay at top of members list because of initialization order
+        Impl* const _pImpl;
 
         const struct PredefinedNode
         {
@@ -259,4 +257,4 @@ namespace zelph::network
         mutable std::shared_mutex                                 _smtx_number_digits;
         FactCreationObserver                                      _on_fact_created;
     };
-}
+} // namespace zelph::network
