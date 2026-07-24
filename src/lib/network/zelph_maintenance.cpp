@@ -26,9 +26,24 @@ along with zelph. If not, see <https://www.gnu.org/licenses/>.
 #include "zelph.hpp"
 
 #include "partial_query_manifest.hpp"
+#include "verified_object_store.hpp"
 #include "zelph_impl.hpp"
 
+#include <filesystem>
+
 using namespace zelph::network;
+
+namespace
+{
+#ifndef __EMSCRIPTEN__
+    std::string resolve_contract_uri(const PartialQueryManifest& manifest, const std::string& uri)
+    {
+        if (uri.empty() || detail::is_hf_uri(uri) || uri.rfind("file://", 0) == 0
+            || std::filesystem::path(uri).is_absolute()) return uri;
+        return (std::filesystem::path(manifest.local_path()).parent_path() / uri).string();
+    }
+#endif
+}
 
 void Zelph::cleanup_isolated(size_t& removed_count) const
 {
@@ -111,11 +126,28 @@ void Zelph::load_from_manifest(const std::string& manifest_path,
 {
     clear_partial_query_session();
     invalidate_fact_structures_cache();
-    _pImpl->loadFromManifest(manifest_path, selection, shard_root, bin_path_override, skip_payload);
+
+    const auto contract = PartialQueryManifest::load(manifest_path, shard_root);
+    std::string effective_bin_override = bin_path_override;
+    if (contract.canonical())
+    {
+        VerifiedObjectStore objects;
+        ObjectRequest request;
+        request.dataset_version = contract.dataset_version();
+        request.uri = resolve_contract_uri(contract, contract.source_uri());
+        request.expected_sha256 = contract.source_sha256();
+        request.section_hint = "graph-header";
+        request.length = contract.source_byte_size();
+        const auto verified = objects.materialize(request);
+        effective_bin_override = verified.local_path.string();
+        diagnostic("Verified canonical graph header: " + effective_bin_override, true);
+    }
+
+    _pImpl->loadFromManifest(manifest_path, selection, shard_root, effective_bin_override, skip_payload);
     try
     {
         configure_partial_query_session(manifest_path, selection, shard_root,
-                                        bin_path_override, !skip_payload);
+                                        effective_bin_override, !skip_payload);
     }
     catch (const std::exception& error)
     {
