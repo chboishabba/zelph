@@ -42,6 +42,12 @@ namespace
             || std::filesystem::path(uri).is_absolute()) return uri;
         return (std::filesystem::path(manifest.local_path()).parent_path() / uri).string();
     }
+
+    void restore_cluster(const Zelph& graph, const std::string& previous)
+    {
+        if (previous.empty() || previous == "default") graph.deactivate_cluster();
+        else graph.set_active_cluster(previous);
+    }
 #endif
 }
 
@@ -144,6 +150,13 @@ void Zelph::load_from_manifest(const std::string& manifest_path,
     }
 
     _pImpl->loadFromManifest(manifest_path, selection, shard_root, effective_bin_override, skip_payload);
+
+    if (!contract.legacy().node_route_supported)
+    {
+        diagnostic("Manifest has no exhaustive node-route sidecar; partial graph remains resident-slice only.", true);
+        return;
+    }
+
     try
     {
         configure_partial_query_session(manifest_path, selection, shard_root,
@@ -162,23 +175,39 @@ void Zelph::append_partial_chunk(const PartialChunkSection section,
                                  const uint32_t chunk_index,
                                  const uint32_t section_count) const
 {
-    detail::chunk_selector selection{chunk_index};
-    invalidate_fact_structures_cache();
-    switch (section)
+    // Query plans use a temporary cluster for their unification scaffolding.
+    // Shards are durable dataset state and must never inherit that cluster,
+    // otherwise query cleanup would delete freshly loaded graph nodes.
+    const std::string previous_cluster = active_cluster_name();
+    deactivate_cluster();
+
+    try
     {
-    case PartialChunkSection::left:
-        _pImpl->loadLeftRightChunkFromPath(verified_path, source_offset, &selection, "left", section_count);
-        break;
-    case PartialChunkSection::right:
-        _pImpl->loadLeftRightChunkFromPath(verified_path, source_offset, &selection, "right", section_count);
-        break;
-    case PartialChunkSection::name_of_node:
-        _pImpl->loadNameOfNodeChunkFromPath(verified_path, source_offset, &selection);
-        break;
-    case PartialChunkSection::node_of_name:
-        _pImpl->loadNodeOfNameChunkFromPath(verified_path, source_offset, &selection);
-        break;
+        detail::chunk_selector selection{chunk_index};
+        invalidate_fact_structures_cache();
+        switch (section)
+        {
+        case PartialChunkSection::left:
+            _pImpl->loadLeftRightChunkFromPath(verified_path, source_offset, &selection, "left", section_count);
+            break;
+        case PartialChunkSection::right:
+            _pImpl->loadLeftRightChunkFromPath(verified_path, source_offset, &selection, "right", section_count);
+            break;
+        case PartialChunkSection::name_of_node:
+            _pImpl->loadNameOfNodeChunkFromPath(verified_path, source_offset, &selection);
+            break;
+        case PartialChunkSection::node_of_name:
+            _pImpl->loadNodeOfNameChunkFromPath(verified_path, source_offset, &selection);
+            break;
+        }
     }
+    catch (...)
+    {
+        restore_cluster(*this, previous_cluster);
+        throw;
+    }
+
+    restore_cluster(*this, previous_cluster);
 }
 #endif
 
