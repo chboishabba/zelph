@@ -10,6 +10,7 @@ Capability-aware script import policy used by partial-graph sessions.
 
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -24,6 +25,7 @@ namespace zelph::console::import_policy
         ImportCapability capability = ImportCapability::rule_program;
         DeclarationSource declaration_source = DeclarationSource::none;
         std::filesystem::path resolved_path;
+        std::filesystem::path declared_path;
         std::filesystem::path declaration_path;
         bool trusted_standard_library = false;
         std::vector<std::filesystem::path> companions;
@@ -158,15 +160,59 @@ namespace zelph::console::import_policy
         return true;
     }
 
+    inline std::filesystem::path compose_extension(const std::filesystem::path& primary,
+                                                   const std::vector<std::filesystem::path>& companions)
+    {
+        if (companions.empty()) return primary;
+        std::string identity = canonical_if_possible(primary).string();
+        for (const auto& companion : companions) identity += "\n" + canonical_if_possible(companion).string();
+        const auto key = std::to_string(std::hash<std::string>{}(identity));
+        const auto root = std::filesystem::temp_directory_path() / "zelph-language-extensions-v1";
+        std::filesystem::create_directories(root);
+        const auto output_path = root / (key + ".zph");
+        const auto temporary_path = root / (key + ".tmp");
+
+        std::ofstream output(temporary_path, std::ios::binary | std::ios::trunc);
+        if (!output) throw std::runtime_error("Cannot compose language extension: " + temporary_path.string());
+        auto append = [&](const std::filesystem::path& path)
+        {
+            std::ifstream input(path, std::ios::binary);
+            if (!input) throw std::runtime_error("Cannot read language extension component: " + path.string());
+            output << "# begin composed component: " << path.filename().string() << '\n';
+            output << input.rdbuf();
+            output << "\n# end composed component: " << path.filename().string() << "\n";
+        };
+        append(primary);
+        for (const auto& companion : companions) append(companion);
+        output.close();
+
+        std::error_code error;
+        std::filesystem::rename(temporary_path, output_path, error);
+        if (error)
+        {
+            std::filesystem::remove(output_path, error);
+            error.clear();
+            std::filesystem::rename(temporary_path, output_path, error);
+            if (error) throw std::runtime_error("Cannot publish composed language extension: " + output_path.string());
+        }
+        return output_path;
+    }
+
     inline ImportDescriptor inspect(const std::string& raw)
     {
         ImportDescriptor result;
         result.resolved_path = resolve_script_reference(raw);
+        result.declared_path = result.resolved_path;
         result.trusted_standard_library = trusted_standard_path(result.resolved_path);
         if (result.resolved_path.extension() != ".zph") return result;
 
         const auto sidecar = std::filesystem::path(result.resolved_path.string() + ".capability");
-        if (read_sidecar(sidecar, result)) return result;
+        if (read_sidecar(sidecar, result))
+        {
+            if (result.partial_language_extension_allowed())
+                result.resolved_path = compose_extension(result.declared_path, result.companions);
+            return result;
+        }
 
         std::ifstream input(result.resolved_path);
         if (!input) throw std::runtime_error("Cannot inspect script '" + result.resolved_path.string() + "'");
