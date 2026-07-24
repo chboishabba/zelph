@@ -33,6 +33,7 @@ along with zelph. If not, see <https://www.gnu.org/licenses/>.
 
 #include <zelph_export.h>
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <unordered_map>
@@ -78,9 +79,7 @@ namespace zelph::network
 
         class AllNodeView
         {
-        private:
             const adjacency_map& _left_ref;
-
         public:
             explicit AllNodeView(const adjacency_map& left) : _left_ref(left) {}
             auto begin() const { return _left_ref.begin(); }
@@ -89,9 +88,7 @@ namespace zelph::network
 
         class LangNodeView
         {
-        private:
             const node_of_name_map& _rev_map;
-
         public:
             explicit LangNodeView(const node_of_name_map& rev) : _rev_map(rev) {}
             auto begin() const { return _rev_map.begin(); }
@@ -113,8 +110,8 @@ namespace zelph::network
         adjacency_set        filter(const adjacency_set& source, Node target) const;
         adjacency_set        filter(Node fact, Node relationType, Node target) const;
         static adjacency_set filter(const adjacency_set& source, const std::function<bool(const Node nd)>& f);
-        adjacency_set        get_left(const Node b) const;
-        adjacency_set        get_right(const Node b) const;
+        adjacency_set        get_left(Node b) const;
+        adjacency_set        get_right(Node b) const;
         bool                 has_left_edge(Node b, Node a) const;
         bool                 has_right_edge(Node a, Node b) const;
         static Node          create_hash(const adjacency_set& vec);
@@ -127,7 +124,7 @@ namespace zelph::network
         Node                 list(const std::vector<std::string>& elements);
         Node                 set(const std::unordered_set<Node>& elements);
         Node                 parse_fact(Node rule, adjacency_set& deductions, Node parent = 0) const;
-        Node                 parse_relation(const Node rule) const;
+        Node                 parse_relation(Node rule) const;
         Node                 count() const;
         AllNodeView          get_all_nodes_view() const;
         LangNodeView         get_lang_nodes_view(const std::string& lang) const;
@@ -152,8 +149,8 @@ namespace zelph::network
         void                 log(int depth, const std::string& category, const std::string& message) const;
         bool                 use_parallel() const { return _use_parallel; }
         void                 toggle_parallel() { _use_parallel = !_use_parallel; }
-        void                 set_synapse(const Node from, const Node to, const double weight) const;
-        bool                 has_synapse(const Node from, const Node to) const;
+        void                 set_synapse(Node from, Node to, double weight) const;
+        bool                 has_synapse(Node from, Node to) const;
         double               edge_weight(Node from, Node to, double fallback = 1.0) const;
         void                 set_edge_weight(Node from, Node to, double weight) const;
 
@@ -199,8 +196,6 @@ namespace zelph::network
                                          const std::string& bin_path_override = "",
                                          bool skip_payload = false) const;
 
-        // Query-driven partial loading. Chunks are appended without clearing
-        // resident state and never use sequential fallback.
         void append_partial_chunk(PartialChunkSection section,
                                   const std::string& verified_path,
                                   uint64_t source_offset,
@@ -223,6 +218,17 @@ namespace zelph::network
                                  partial_query::RowContract contract) const;
         std::string finish_partial_query(bool evaluation_fixed_point, uint64_t result_rows = 0) const;
         std::string partial_query_status_json() const;
+        uintptr_t partial_query_instance_token() const;
+
+        // Internal resident implementations retained by source-specific CMake
+        // renaming. Routed wrappers call these after discharging obligations.
+        Node          node_resident(const std::string& name, std::string lang = "");
+        adjacency_set get_fact_objects_resident(Node subject, Node predicate) const;
+        adjacency_set get_fact_subjects_resident(Node predicate, Node object) const;
+        adjacency_set transitive_targets_resident(Node start, Node predicate, bool include_start) const;
+        adjacency_set transitive_sources_resident(Node target, Node predicate, bool include_target) const;
+        std::string   get_name_resident(Node node, std::string lang = "", bool fallback = false) const;
+        Node          get_node_resident(const std::string& name, std::string lang = "") const;
 
         void                                        set_active_cluster(const std::string& name) const;
         void                                        deactivate_cluster() const;
@@ -250,8 +256,8 @@ namespace zelph::network
 
     protected:
         std::string                                               _lang{"en"};
-        std::unordered_map<network::Node, std::string>            _core_names_by_node;
-        std::unordered_map<std::string, network::Node>            _core_names_by_name;
+        std::unordered_map<Node, std::string>                     _core_names_by_node;
+        std::unordered_map<std::string, Node>                     _core_names_by_name;
         bool                                                      _use_parallel{true};
         std::shared_ptr<const std::unordered_map<Node, uint32_t>> _number_digits;
         mutable std::shared_mutex                                 _smtx_number_digits;
